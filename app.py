@@ -1220,8 +1220,8 @@ with main_tabs[0]:
                                         color = '#28a745' if val > 0 else '#dc3545' if val < 0 else '#6c757d'
                                         return f'color: {color}; font-weight: 600'
 
-                                    # Apply styling
-                                    styled_df = display_monthly.style.applymap(color_negative_red)
+                                    # Apply styling (pandas 2.1+: applymap -> map)
+                                    styled_df = display_monthly.style.map(color_negative_red)
 
                                     st.dataframe(styled_df, use_container_width=True, height=400)
 
