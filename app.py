@@ -1299,7 +1299,7 @@ with main_tabs[0]:
                                             return 'color: #dc3545; font-weight: bold'
                                         return ''
                                     
-                                    styled_trades = trade_display.style.applymap(
+                                    styled_trades = trade_display.style.map(
                                         color_roi, subset=['ROI %']
                                     )
                                     st.dataframe(styled_trades, use_container_width=True, height=400)
@@ -1378,7 +1378,7 @@ with main_tabs[0]:
                                             return 'color: #dc3545; font-weight: bold'
                                         return ''
                                     
-                                    styled_open = open_df.style.applymap(
+                                    styled_open = open_df.style.map(
                                         color_unrealized, subset=['Unrealized ROI %']
                                     )
                                     st.dataframe(styled_open, use_container_width=True)
@@ -2518,7 +2518,7 @@ with main_tabs[2]:
                             return ''
                         
                         if 'Unrealized ROI %' in open_df.columns:
-                            styled_df = open_df.style.applymap(color_pnl, subset=['Unrealized ROI %'])
+                            styled_df = open_df.style.map(color_pnl, subset=['Unrealized ROI %'])
                         else:
                             styled_df = open_df
                         
