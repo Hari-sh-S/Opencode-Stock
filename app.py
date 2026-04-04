@@ -1342,7 +1342,8 @@ with main_tabs[0]:
                                         
                                         # Get current price (last available)
                                         if ticker in engine.data and not engine.data[ticker].empty:
-                                            current_price = float(engine.data[ticker]['Close'].iloc[-1])
+                                            _close = engine.data[ticker]['Close'].iloc[-1]
+                                            current_price = float(_close.iloc[0] if hasattr(_close, 'iloc') else _close)
                                             current_date = engine.data[ticker].index[-1]
                                             unrealized_roi = ((current_price - buy_price) / buy_price) * 100
                                         else:
