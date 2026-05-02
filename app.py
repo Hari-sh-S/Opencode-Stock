@@ -25,6 +25,14 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Bootstrap: copy Streamlit Secrets → os.environ so all modules can use os.getenv()
+# This is a no-op on local (where .env is used instead)
+try:
+    from config import bootstrap_env_from_secrets
+    bootstrap_env_from_secrets()
+except Exception:
+    pass
+
 # Show loading indicator immediately for wake-up
 with st.spinner("🔄 App is waking up... Please wait..."):
     pass  # Spinner shows during import time
@@ -3151,21 +3159,73 @@ with main_tabs[3]:
 # ==================== TAB 5: DHAN AUTH ====================
 with main_tabs[4]:
     st.markdown("### 🔐 Dhan API Authentication")
-    st.markdown("""
-    <div style='background:rgba(30,144,255,0.1);border-left:4px solid #1e90ff;
-                padding:12px 16px;border-radius:6px;margin-bottom:16px;'>
-    Authenticate with Dhan using your <b>Client ID + PIN + TOTP</b>.<br>
-    Client ID and PIN are saved once. Only enter your TOTP (from your authenticator app) each session.
-    </div>
-    """, unsafe_allow_html=True)
 
-    from config import get_saved_credentials, save_credentials_to_env, authenticate_dhan
+    from config import (
+        get_saved_credentials, save_credentials_to_env,
+        authenticate_dhan, _is_streamlit_cloud,
+    )
 
-    creds = get_saved_credentials()
+    _on_cloud = _is_streamlit_cloud()
+    creds     = get_saved_credentials()
 
-    # ── Saved Credentials Section ───────────────────────────────────────────
-    with st.expander("⚙️ Saved Credentials (Client ID & PIN)", expanded=not bool(creds.get('client_id'))):
-        st.caption("These are saved permanently to your .env file. You only need to set them once.")
+    # ── Environment banner ───────────────────────────────────────────
+    if _on_cloud:
+        st.info(
+            "🌥️ **Running on Streamlit Cloud**  \n"
+            "Client ID and PIN are read from **Streamlit Secrets** (permanent).  \n"
+            "Access Token is stored in the **session** only — re-enter TOTP after each restart."
+        )
+    else:
+        st.info(
+            "💻 **Running locally**  \n"
+            "Credentials are read from your **.env file** (permanent for Client ID/PIN).  \n"
+            "Access Token is also saved to .env and persists until Dhan invalidates it (~24h)."
+        )
+
+    # ── Step 1: Credentials Setup ──────────────────────────────────────
+    st.markdown("---")
+
+    if _on_cloud:
+        # On Streamlit Cloud: show what's configured in secrets, no save UI
+        st.markdown("#### ⚙️ Step 1 — Streamlit Secrets Configuration")
+        st.markdown("""
+        Client ID and PIN are configured in your app's **Streamlit Secrets** — not entered here.
+        To update them:
+        1. Go to your Streamlit Cloud dashboard
+        2. Click your app → **⋮ → Settings → Secrets**
+        3. Add / edit the values in TOML format (see below)
+        4. Click **Save** — the app restarts with new values
+        """)
+
+        with st.expander("📋 Required Streamlit Secrets format", expanded=not bool(creds.get('client_id'))):
+            st.code("""
+# Paste this into Streamlit Cloud → App Settings → Secrets
+
+DHAN_CLIENT_ID = "1000000001"
+DHAN_PIN       = "12345"
+
+# Optional: set a long-lived token here so you don't need TOTP every restart
+# Leave blank to always use TOTP to generate a fresh token
+DHAN_ACCESS_TOKEN = ""
+""", language="toml")
+
+        # Status
+        if creds.get('client_id'):
+            cid     = creds['client_id']
+            masked  = cid[:3] + '*' * max(0, len(cid) - 6) + cid[-3:] if len(cid) > 6 else '***'
+            st.success(f"✅ Client ID found in Secrets: `{masked}`")
+        else:
+            st.error("❌ DHAN_CLIENT_ID not found in Streamlit Secrets. Add it via the dashboard.")
+
+        if creds.get('pin'):
+            st.success("✅ PIN found in Secrets")
+        else:
+            st.error("❌ DHAN_PIN not found in Streamlit Secrets.")
+
+    else:
+        # Local: show editable fields that save to .env
+        st.markdown("#### ⚙️ Step 1 — Save Client ID & PIN (one-time)")
+        st.caption("Saved permanently to your .env file. You never need to enter these again.")
 
         c1, c2 = st.columns(2)
         with c1:
@@ -3174,7 +3234,7 @@ with main_tabs[4]:
                 value=creds.get('client_id', ''),
                 key="dhan_auth_client_id",
                 placeholder="e.g. 1000000001",
-                help="Your Dhan trading account client ID"
+                help="Your Dhan trading account client ID (Profile → Account Info)"
             )
         with c2:
             input_pin = st.text_input(
@@ -3183,123 +3243,128 @@ with main_tabs[4]:
                 type="password",
                 key="dhan_auth_pin",
                 placeholder="Your 5-digit Dhan PIN",
-                help="Your Dhan account PIN (stored securely in .env)"
+                help="Your Dhan account login PIN (stored in .env, never in git)"
             )
 
-        if st.button("💾 Save Client ID & PIN", key="save_dhan_creds_btn"):
+        if st.button("💾 Save to .env", key="save_dhan_creds_btn"):
             if input_client_id.strip() and input_pin.strip():
-                save_credentials_to_env(client_id=input_client_id.strip(), pin=input_pin.strip())
-                st.success("✅ Client ID and PIN saved to .env file.")
+                save_credentials_to_env(
+                    client_id=input_client_id.strip(),
+                    pin=input_pin.strip()
+                )
+                st.success("✅ Saved to .env file permanently.")
                 st.rerun()
             else:
-                st.error("❌ Please enter both Client ID and PIN before saving.")
+                st.error("❌ Enter both Client ID and PIN.")
 
-        # Show current status
         if creds.get('client_id'):
-            cid = creds['client_id']
-            masked = cid[:3] + '*' * max(0, len(cid) - 6) + cid[-3:] if len(cid) > 6 else cid
+            cid    = creds['client_id']
+            masked = cid[:3] + '*' * max(0, len(cid) - 6) + cid[-3:] if len(cid) > 6 else '***'
             st.success(f"✅ Client ID saved: `{masked}`")
         else:
-            st.warning("⚠️ Client ID not set")
+            st.warning("⚠️ Client ID not set yet")
 
+    # ── Step 2: TOTP Authentication ───────────────────────────────────
     st.markdown("---")
+    st.markdown("#### 🔢 Step 2 — Authenticate with TOTP")
 
-    # ── TOTP Authentication ───────────────────────────────────────────────
-    st.markdown("#### 🔢 Enter TOTP to Generate Access Token")
-    st.caption("Open your authenticator app (Google Authenticator / DhanHQ app) and enter the 6-digit code.")
+    # Show token status
+    fresh_creds = get_saved_credentials()
+    cur_token   = fresh_creds.get('access_token', '')
+    if cur_token:
+        masked_tok = cur_token[:8] + '...' + cur_token[-4:]
+        if _on_cloud:
+            st.success(f"✅ Token active this session: `{masked_tok}` ({len(cur_token)} chars)")
+        else:
+            st.success(f"✅ Token saved in .env: `{masked_tok}` ({len(cur_token)} chars)")
+    else:
+        st.warning("⚠️ No active token. Enter TOTP below to generate one.")
+
+    if _on_cloud:
+        st.caption(
+            "🔄 On Streamlit Cloud, tokens are stored **in your session only** and lost on restart. "
+            "Open your authenticator app and enter a fresh TOTP to re-authenticate after each restart."
+        )
+    else:
+        st.caption(
+            "💾 Locally, the token is saved to .env after auth and reloaded automatically until Dhan expires it (~24h)."
+        )
 
     totp_col, btn_col = st.columns([2, 1])
     with totp_col:
         totp_input = st.text_input(
-            "TOTP (6 digits)",
+            "TOTP",
             key="dhan_totp_input",
             max_chars=6,
-            placeholder="123456",
-            help="6-digit time-based OTP from your authenticator app",
+            placeholder="6-digit code from Google Authenticator",
             label_visibility="collapsed"
         )
     with btn_col:
-        auth_btn = st.button("🔑 Authenticate", type="primary", key="dhan_auth_btn",
-                             use_container_width=True)
+        auth_btn = st.button(
+            "🔑 Authenticate", type="primary",
+            key="dhan_auth_btn", use_container_width=True
+        )
 
     if auth_btn:
-        if not totp_input or len(totp_input.strip()) != 6:
-            st.error("❌ Please enter a valid 6-digit TOTP.")
+        if not totp_input or len(totp_input.strip()) != 6 or not totp_input.strip().isdigit():
+            st.error("❌ Enter a valid 6-digit TOTP.")
         else:
             with st.spinner("Authenticating with Dhan..."):
                 result = authenticate_dhan(totp_input.strip())
-
             if result['success']:
                 st.success(result['message'])
                 st.balloons()
+                # Sync the new token into os.environ immediately
+                bootstrap_env_from_secrets()
             else:
-                st.error(f"❌ Authentication failed: {result['message']}")
+                st.error(f"❌ {result['message']}")
 
+    # ── Step 3: Connection Test ───────────────────────────────────────
     st.markdown("---")
+    st.markdown("#### 📡 Step 3 — Test Connection")
 
-    # ── Connection Test ────────────────────────────────────────────────
-    st.markdown("#### 📡 Test Dhan API Connection")
-
-    # Current token status
-    fresh_creds = get_saved_credentials()
-    token = fresh_creds.get('access_token', '')
-    if token:
-        masked_token = token[:8] + '...' + token[-4:]
-        st.info(f"Current token: `{masked_token}` ({len(token)} chars)")
-    else:
-        st.warning("⚠️ No access token saved. Authenticate above first.")
-
-    if st.button("🔍 Test Connection", key="dhan_test_conn_btn"):
-        with st.spinner("Testing Dhan API..."):
+    if st.button("🔍 Test Dhan API", key="dhan_test_conn_btn"):
+        with st.spinner("Testing..."):
             try:
-                from config import get_dhan_client, validate_credentials, DHAN_CLIENT_ID
+                from config import get_dhan_client, validate_credentials
                 validate_credentials()
                 dhan_test = get_dhan_client()
-                st.success("✅ Dhan client created successfully.")
+                st.success("✅ Dhan client created.")
 
-                # Test: fetch recent RELIANCE data
                 from datetime import date as _date, timedelta
-                _from = (_date.today() - timedelta(days=10)).strftime('%Y-%m-%d')
-                _to   = _date.today().strftime('%Y-%m-%d')
-                resp  = dhan_test.historical_daily_data(
-                    security_id="1333",          # RELIANCE
+                resp = dhan_test.historical_daily_data(
+                    security_id="1333",
                     exchange_segment="NSE_EQ",
                     instrument_type="EQUITY",
-                    from_date=_from,
-                    to_date=_to,
+                    from_date=(_date.today() - timedelta(days=10)).strftime('%Y-%m-%d'),
+                    to_date=_date.today().strftime('%Y-%m-%d'),
                 )
                 if isinstance(resp, dict) and resp.get('status') == 'success':
                     pts = len(resp.get('data', {}).get('timestamp', []))
-                    st.success(f"✅ API Test Passed! RELIANCE: {pts} data points returned.")
-                elif isinstance(resp, dict):
-                    st.warning(f"⚠️ API responded but status unknown: {str(resp)[:200]}")
+                    st.success(f"✅ Equity API: {pts} data points (RELIANCE)")
                 else:
-                    st.info(f"✅ Client works. Response: {str(resp)[:200]}")
+                    st.warning(f"⚠️ Equity API: {str(resp)[:200]}")
 
-                # Test: rolling options data availability
-                st.markdown("---")
-                st.markdown("**🛡️ Rolling Options Data (for Put Hedge)**")
+                st.markdown("**🛡️ Rolling Options (Put Hedge)**")
                 try:
-                    _opts_resp = dhan_test.rolling_options_data(
-                        exchange_segment="NSE_FNO",
-                        instrument="OPTIDX",
+                    o_resp = dhan_test.rolling_options_data(
+                        exchange_segment="NSE_FNO", instrument="OPTIDX",
                         drvOptionType="PUT",
                         fromDate=(_date.today() - timedelta(days=7)).strftime('%Y-%m-%d'),
                         toDate=_date.today().strftime('%Y-%m-%d'),
-                        strike="ATM",
-                        expiryType="WEEKLY",
+                        strike="ATM", expiryType="WEEKLY",
                     )
-                    if isinstance(_opts_resp, dict) and _opts_resp.get('status') == 'success':
-                        _pts = len(_opts_resp.get('data', {}).get('timestamp', []))
-                        st.success(f"✅ Rolling Options API works! {_pts} data points for ATM PUT (last 7 days).")
+                    if isinstance(o_resp, dict) and o_resp.get('status') == 'success':
+                        n = len(o_resp.get('data', {}).get('timestamp', []))
+                        st.success(f"✅ Rolling Options API: {n} data points")
                     else:
-                        st.warning(f"⚠️ Rolling Options: {str(_opts_resp)[:300]}")
+                        st.warning(f"⚠️ Rolling Options: {str(o_resp)[:300]}")
                 except AttributeError:
-                    st.info("⚠️ `rolling_options_data` method not found in SDK — will use direct REST API.")
+                    st.info("⚠️ SDK missing rolling_options_data — direct REST will be used during backtest.")
                 except Exception as oe:
-                    st.warning(f"⚠️ Rolling Options test failed: {oe}")
+                    st.warning(f"⚠️ Rolling Options: {oe}")
 
             except ValueError as ve:
-                st.error(f"❌ Credentials error: {ve}")
+                st.error(f"❌ {ve}")
             except Exception as e:
                 st.error(f"❌ Connection failed: {e}")
