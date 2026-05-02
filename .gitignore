@@ -54,3 +54,11 @@ indicators_backup.py
 # OS
 .DS_Store
 Thumbs.db
+
+# Environment / secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Nifty Put Hedge option data cache
+data_cache/nifty_put_hedge/

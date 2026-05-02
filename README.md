@@ -1,5 +1,5 @@
 ---
-title: Investing Scanner
+title: Investing Scanner — Put Hedge
 emoji: 📊
 colorFrom: red
 colorTo: blue
@@ -9,168 +9,200 @@ app_file: app.py
 pinned: true
 ---
 
-# 📊 Investing Scanner
+# 📊 Investing Scanner — Nifty Put Hedge Edition
 
-An advanced backtesting platform for the Indian Stock Market, built with Streamlit. Analyze portfolios, test strategies, and optimize your trading approach using real NSE data.
+An advanced backtesting platform for the Indian Stock Market with **Nifty Put Hedge** support — protect your portfolio using NIFTY ATM Weekly Puts when a regime filter triggers.
 
 ![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=for-the-badge&logo=Streamlit&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Dhan](https://img.shields.io/badge/Dhan_API-Integrated-green?style=for-the-badge)
+
+---
 
 ## 🚀 Features
 
-### Core Functionality
-- **Advanced Backtesting Engine** - Run comprehensive portfolio backtests with historical NSE data
-- **Multiple Universe Support** - Test across Nifty50, Nifty500, sectoral indices, and custom stock lists
-- **Flexible Rebalancing** - Weekly or monthly rebalancing with customizable dates
-- **Regime Filters** - EMA, MACD, SuperTrend, and Equity-based filters to adapt to market conditions
-- **Uncorrelated Assets** - Allocate to Gold, Bonds, or other assets for diversification
-- **Exit Rank Strategy** - Dynamic position sizing based on stock rankings
+### Core Backtesting
+- **Multiple Universe Support** — Nifty50, Nifty500, sectoral indices, custom lists
+- **Regime Filters** — EMA, MACD, SuperTrend, Equity, Breadth-based
+- **Flexible Rebalancing** — Weekly / Monthly with holiday handling
+- **Uncorrelated Assets** — Allocate to Gold, Bonds on regime trigger
 
-### Performance Analytics
-- CAGR, Sharpe Ratio, Max Drawdown, Win Rate
-- Monthly returns heatmap
-- Equity curve and drawdown charts
-- Detailed trade history and portfolio reports
+### 🛡️ Nifty Put Hedge (New)
+- Automatically buys **NIFTY ATM Weekly Puts** when regime filter triggers
+- **Delta-neutral lot sizing**: `portfolio_value / nifty_spot / (0.5 × lot_size)`
+- Tradebook shows full option details: `NIFTY25000PE03JUL2025`
+- Data via **Dhan Rolling Options API** (5 years of expired options data)
+- VIX/Black-Scholes fallback when API unavailable
+- Hedge Efficiency metrics in Performance tab
 
-### Data Management
-- **Parquet-based caching** - Lightning-fast data retrieval
-- **NSE Integration** - Live stock list updates from NSE India
-- **Persistent backtest logs** - Save and compare multiple strategies
+---
 
-## 📦 Installation
+## ⚙️ Setup
 
-### Prerequisites
-- Python 3.8 or higher
-- pip package manager
+### 1. Clone & Install
 
-### Setup
-
-1. **Clone the repository**
 ```bash
-git clone https://github.com/YOUR_USERNAME/investing-scanner.git
-cd investing-scanner
-```
-
-2. **Install dependencies**
-```bash
+git clone https://github.com/Hari-sh-S/investing-scanner-put-hedge.git
+cd investing-scanner-put-hedge
 pip install -r requirements.txt
 ```
 
-3. **Run the application**
+### 2. Configure Credentials
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and fill in:
+```
+DHAN_CLIENT_ID=your_client_id
+DHAN_PIN=your_5_digit_pin
+```
+
+> **Note:** `DHAN_ACCESS_TOKEN` is auto-filled by the app — you don't need to set it manually.
+
+### 3. Run Locally
+
 ```bash
 streamlit run app.py
 ```
 
-The app will open in your default browser at `http://localhost:8501`
+---
 
-## 🌐 Live Demo
+## 🔐 Dhan Authentication — Step-by-Step
 
-Visit the live application: [Investing Scanner on Streamlit Cloud](https://YOUR_APP_URL.streamlit.app)
+The app uses **TOTP-based authentication** to get a fresh access token from Dhan.  
+Your Client ID and PIN are saved once; you only enter a TOTP each session.
 
-## 🎯 Quick Start
+### First-Time Setup
 
-### Running Your First Backtest
+1. **Open the app** → click the **🔐 Dhan Auth** tab (rightmost tab)
 
-1. **Select a Universe** - Choose from Nifty50, Nifty500, or any sectoral index
-2. **Configure Portfolio** - Set initial capital, number of stocks, and rebalancing frequency
-3. **Define Strategy** - Use the scoring console to create your ranking formula
-   - Example: `6 Month Performance` ranks stocks by 6-month returns
-4. **Run Backtest** - Click "🚀 Run Backtest" and analyze results
+2. **Expand "⚙️ Saved Credentials"** section:
+   - Enter your **Dhan Client ID** (10-digit number from Dhan app → Profile)
+   - Enter your **Dhan PIN** (the 5-digit PIN you use to log in to Dhan)
+   - Click **💾 Save Client ID & PIN**
+   - ✅ You'll see a confirmation — these are saved to `.env` permanently
 
-### Example Strategies
+3. **Authenticate with TOTP**:
+   - Open **Google Authenticator** (or any TOTP app) on your phone
+   - Find your **Dhan** entry and note the 6-digit code
+   - Type it into the **TOTP (6 digits)** box in the app
+   - Click **🔑 Authenticate**
+   - ✅ If successful, the access token is auto-saved to `.env`
 
-**Momentum Strategy**
-```
-6 Month Performance
-```
+4. **Test the connection**:
+   - Click **🔍 Test Connection**
+   - You should see:
+     - ✅ Dhan client created
+     - ✅ API Test Passed (equity data)
+     - ✅ Rolling Options API works (for Put Hedge)
 
-**Quality + Momentum**
-```
-(6 Month Performance + 6 Month Sharpe) / 2
-```
+### Daily Use (Token Refresh)
 
-**Multi-Factor**
-```
-(3 Month Performance * 0.3) + (6 Month Performance * 0.4) + (6 Month Sharpe * 0.3)
-```
+Dhan access tokens expire daily. Each morning:
+
+1. Go to **🔐 Dhan Auth** tab
+2. Enter today's TOTP (6-digit code from your authenticator)
+3. Click **🔑 Authenticate**
+4. Done — backtest with Put Hedge will now work for the day
+
+> **Tip:** If you see `DHAN_ACCESS_TOKEN not configured` error in backtests, just re-authenticate here.
+
+### Setting Up TOTP on Dhan
+
+If you haven't set up TOTP yet:
+1. Log in to [Dhan Web](https://web.dhan.co) or the Dhan app
+2. Go to **Profile → Security → 2FA Settings**
+3. Enable **TOTP** and scan the QR code with Google Authenticator
+4. Save the backup codes securely
+
+---
+
+## 🛡️ Using Nifty Put Hedge
+
+### How It Works
+
+When a regime filter triggers (e.g., NIFTY 50 drops below its 200 EMA):
+
+1. The engine fetches the current NIFTY ATM Weekly Put premium from Dhan API
+2. Calculates **delta-neutral lots**: buys enough puts to fully offset portfolio delta
+3. Records the trade as `NIFTY25000PE03JUL2025` (with actual strike + expiry)
+4. When regime recovers, closes the puts and records proceeds
+
+### Configuration
+
+In the **Backtest → Regime Filter** section:
+
+| Setting | Description |
+|---------|-------------|
+| **Regime Action** | Select "Nifty Put Hedge" |
+| **Hedge Ratio** | `1.0` = full delta neutral, `0.5` = half hedge, `1.5` = over-hedge |
+| **Keep Stocks + Add Puts** | ✅ Keep stocks AND buy puts (insurance mode) |
+
+### Understanding the Tradebook
+
+Put hedge trades appear as:
+
+| Date | Ticker | Action | Shares | Price | Strike | Expiry |
+|------|--------|--------|--------|-------|--------|--------|
+| 2024-08-05 | NIFTY24700PE08AUG2024 | BUY_HEDGE | 225 | 480.5 | 24700 | 2024-08-08 |
+| 2024-08-20 | NIFTY24700PE08AUG2024 | SELL_HEDGE | 225 | 120.0 | 24700 | 2024-08-08 |
+
+### Performance Metrics
+
+After backtest, the **Nifty Put Hedge Analysis** section shows:
+- **Hedge Events** — number of times hedge was activated
+- **Hedge Cost** — total premium paid
+- **Hedge Proceeds** — total received on closing
+- **Hedge Net P&L** — net profit/loss from hedges
+- **Hedge Efficiency** — (Proceeds − Cost) / Cost × 100%
+
+---
 
 ## 📁 Project Structure
 
 ```
-investing-scanner/
-├── app.py                    # Main Streamlit application
-├── engine.py                 # Core backtesting logic
-├── portfolio_engine.py       # Portfolio management and rebalancing
-├── scoring.py               # Strategy scoring and validation
-├── indicators.py            # Technical indicators calculation
-├── nse_fetcher.py          # NSE data fetching utilities
-├── nifty_universe.py       # Stock universe definitions
-├── requirements.txt        # Python dependencies
-└── README.md              # This file
+investing-scanner-put-hedge/
+├── app.py                    # Main Streamlit app (5 tabs)
+├── portfolio_engine.py       # Backtesting engine + put hedge logic
+├── nifty_put_hedge.py        # 🛡️ Dhan Rolling Options API + delta-neutral calc
+├── config.py                 # Dhan TOTP auth + credential persistence
+├── scoring.py                # Strategy scoring
+├── indicators.py             # Technical indicators
+├── nse_fetcher.py            # NSE data utilities
+├── nifty_universe.py         # Stock universe definitions
+├── requirements.txt          # Dependencies
+├── .env.example              # Credentials template (copy to .env)
+└── README.md
 ```
-
-## 🛠️ Technologies Used
-
-- **[Streamlit](https://streamlit.io/)** - Web application framework
-- **[yfinance](https://github.com/ranaroussi/yfinance)** - Yahoo Finance data fetcher
-- **[Pandas](https://pandas.pydata.org/)** - Data manipulation
-- **[Plotly](https://plotly.com/)** - Interactive charts
-- **[TA-Lib](https://github.com/mrjbq7/ta-lib)** - Technical analysis indicators
-- **PyArrow** - Parquet file support
-
-## 📊 Supported Universes
-
-### Broad Market
-- Nifty 50, Nifty 100, Nifty 200, Nifty 500
-- Nifty Midcap 50/100/150
-- Nifty Smallcap 50/100/250
-
-### Sectoral
-- Banking, Auto, Pharma, IT, FMCG, Metal
-- Energy, Realty, Media, Infra, PSU Bank
-- And 15+ more sectors
-
-### Thematic
-- Dividend Opportunities, Growth Sectors, Consumption
-- Digital India, EV, Healthcare, And more
-
-## 🔧 Configuration
-
-### Regime Filters
-Configure market regime detection to adjust portfolio allocation:
-- **EMA** - Exit when price < EMA (34/68/100/150/200)
-- **MACD** - Exit on bearish MACD crossover
-- **SuperTrend** - Exit when SuperTrend turns bearish
-- **Equity** - Reduce allocation on portfolio drawdown
-
-### Rebalancing Options
-- **Weekly** - Choose day of week (Monday-Friday)
-- **Monthly** - Choose date (1-30)
-- **Alternative Day** - Handle holidays (Previous/Next day)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📝 License
-
-This project is for educational purposes. Please ensure compliance with data provider terms of service.
-
-## 🙏 Acknowledgments
-
-- Built for the Indian stock market community
-- Data sourced from Yahoo Finance and NSE India
-
-## 📧 Contact
-
-For questions or support, please open an issue on GitHub.
 
 ---
 
-⭐ **Star this repository** if you find it useful!
+## 📦 Requirements
+
+- Python 3.8+
+- **Dhan Data API subscription** (for Rolling Options historical data)
+- Dhan account with TOTP/2FA enabled
+
+Key dependencies:
+```
+streamlit
+pandas
+yfinance
+plotly
+dhanhq         # Dhan broker SDK
+python-dotenv
+requests
+scipy
+```
+
+---
+
+## 📝 License
+
+Educational purposes only. Comply with Dhan and NSE data terms of service.
+
+---
+
+⭐ **Star this repo** if useful! | Based on [investing-scanner](https://github.com/Hari-sh-S/investing-scanner)

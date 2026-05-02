@@ -1051,6 +1051,172 @@ class PortfolioEngine:
             print(f"   [BREADTH] Error calculating breadth: {e}")
             return 100.0  # Default to not triggered on error
 
+    def _apply_put_hedge(self, date, cash, holdings, put_hedge_df, put_hedge_config):
+        """
+        Buy NIFTY ATM Weekly Puts as a delta-neutral portfolio hedge.
+
+        Lot calculation (delta-neutral):
+            portfolio_NIFTY_units = portfolio_value × beta / nifty_spot
+            lots = portfolio_NIFTY_units × hedge_ratio / (ATM_delta × lot_size)
+
+        Returns:
+            (cash_after, hedge_position_dict, cost_paid)
+        """
+        from nifty_put_hedge import (
+            get_put_premium_on_date, get_nifty_spot_on_date,
+            get_atm_strike, get_next_weekly_expiry, get_option_ticker_name,
+            delta_neutral_lots, get_nifty_lot_size, build_fallback_put_series,
+        )
+
+        as_of_date   = date.date() if hasattr(date, 'date') else date
+        hedge_ratio  = put_hedge_config.get('hedge_ratio', 1.0)  # 1.0 = full delta neutral
+        beta         = put_hedge_config.get('portfolio_beta', 1.0)
+
+        # ── Current portfolio value (cash + stock holdings) ─────────────────
+        portfolio_value = cash
+        for ticker, shares in holdings.items():
+            if ticker in self.data and date in self.data[ticker].index:
+                portfolio_value += shares * self._get_scalar(self.data[ticker].loc[date, 'Close'])
+
+        # ── NIFTY spot ───────────────────────────────────────────────────────
+        nifty_spot = get_nifty_spot_on_date(
+            date if isinstance(date, pd.Timestamp) else pd.Timestamp(date),
+            put_hedge_df,
+        )
+
+        if nifty_spot <= 0:
+            print(f"[PUT HEDGE] Cannot determine NIFTY spot on {date}. Skipping hedge.")
+            return cash, {}, 0.0
+
+        # ── ATM strike & next weekly expiry ──────────────────────────────────
+        atm_strike  = get_atm_strike(nifty_spot)
+        expiry_date = get_next_weekly_expiry(as_of_date)
+        option_ticker = get_option_ticker_name(atm_strike, expiry_date)
+
+        # ── Put premium ──────────────────────────────────────────────────────
+        put_premium = get_put_premium_on_date(
+            date if isinstance(date, pd.Timestamp) else pd.Timestamp(date),
+            put_hedge_df,
+        )
+
+        if put_premium <= 0:
+            # On-the-fly VIX/B-S fallback for this single date
+            fallback_df = build_fallback_put_series(as_of_date, as_of_date)
+            if fallback_df is not None and not fallback_df.empty:
+                put_premium = get_put_premium_on_date(
+                    pd.Timestamp(as_of_date), fallback_df
+                )
+
+        if put_premium <= 0:
+            print(f"[PUT HEDGE] No put premium for {date}. Skipping hedge.")
+            return cash, {}, 0.0
+
+        # ── Delta-neutral lots ───────────────────────────────────────────────
+        lot_size = get_nifty_lot_size(as_of_date)
+        n_lots   = delta_neutral_lots(portfolio_value, nifty_spot, as_of_date,
+                                      hedge_ratio=hedge_ratio, beta=beta)
+        if n_lots <= 0:
+            print(f"[PUT HEDGE] Portfolio too small for even 1 lot. Spot={nifty_spot:.0f}")
+            return cash, {}, 0.0
+
+        cost = n_lots * lot_size * put_premium
+        # Trim if insufficient cash
+        while cost > cash and n_lots > 0:
+            n_lots -= 1
+            cost = n_lots * lot_size * put_premium
+
+        if n_lots <= 0:
+            print(f"[PUT HEDGE] Insufficient cash (₹{cash:.0f}) for hedge.")
+            return cash, {}, 0.0
+
+        cash -= cost
+        self.trades.append({
+            'Date':        date,
+            'Ticker':      option_ticker,           # e.g. NIFTY25000PE03JUL2025
+            'Action':      'BUY_HEDGE',
+            'Shares':      n_lots * lot_size,       # total quantity
+            'Price':       put_premium,
+            'Value':       cost,
+            'Score':       0,
+            'Rank':        'Put Hedge',
+            'Reason':      'REGIME_HEDGE',
+            'Strike':      atm_strike,
+            'Expiry':      str(expiry_date),
+            'NIFTY_Spot':  nifty_spot,
+            'Lots':        n_lots,
+        })
+
+        hedge_position = {
+            'lots':         n_lots,
+            'premium_paid': put_premium,
+            'entry_date':   date,
+            'lot_size':     lot_size,
+            'atm_strike':   atm_strike,
+            'expiry_date':  expiry_date,
+            'option_ticker': option_ticker,
+        }
+        print(f"[PUT HEDGE] Bought {n_lots} lots {option_ticker} @ ₹{put_premium:.2f}"
+              f" | NIFTY={nifty_spot:.0f} | Cost=₹{cost:,.0f}")
+        return cash, hedge_position, cost
+
+    def _close_put_hedge(self, date, hedge_position, put_hedge_df):
+        """
+        Close (sell) an existing NIFTY Put hedge position.
+
+        Returns:
+            proceeds (float) — cash received from closing the puts.
+        """
+        if not hedge_position:
+            return 0.0
+
+        from nifty_put_hedge import get_put_premium_on_date, build_fallback_put_series
+
+        n_lots        = hedge_position.get('lots', 0)
+        lot_size      = hedge_position.get('lot_size', 75)
+        entry_premium = hedge_position.get('premium_paid', 0)
+        option_ticker = hedge_position.get('option_ticker', 'NIFTY_ATM_PE')
+
+        if n_lots <= 0:
+            return 0.0
+
+        # Current put price
+        exit_premium = get_put_premium_on_date(
+            date if isinstance(date, pd.Timestamp) else pd.Timestamp(date),
+            put_hedge_df,
+        )
+
+        if exit_premium <= 0:
+            as_of = date.date() if hasattr(date, 'date') else date
+            fallback_df = build_fallback_put_series(as_of, as_of)
+            if fallback_df is not None and not fallback_df.empty:
+                exit_premium = get_put_premium_on_date(pd.Timestamp(as_of), fallback_df)
+
+        # Puts likely decayed if market recovered → assume 30% residual
+        if exit_premium <= 0:
+            exit_premium = entry_premium * 0.30
+
+        proceeds = n_lots * lot_size * exit_premium
+        pnl      = proceeds - (n_lots * lot_size * entry_premium)
+
+        self.trades.append({
+            'Date':       date,
+            'Ticker':     option_ticker,
+            'Action':     'SELL_HEDGE',
+            'Shares':     n_lots * lot_size,
+            'Price':      exit_premium,
+            'Value':      proceeds,
+            'Score':      0,
+            'Rank':       'Put Hedge',
+            'Reason':     'REGIME_RECOVERY',
+            'Strike':     hedge_position.get('atm_strike', 0),
+            'Expiry':     str(hedge_position.get('expiry_date', '')),
+            'Lots':       n_lots,
+        })
+        print(f"[PUT HEDGE] Closed {n_lots} lots {option_ticker} @ ₹{exit_premium:.2f}"
+              f" | Entry=₹{entry_premium:.2f} | P&L=₹{pnl:,.0f}")
+        return proceeds
+
+
     def run_rebalance_strategy(self, scoring_formula, num_stocks, exit_rank, 
                               rebal_config, regime_config=None, uncorrelated_config=None, 
                               reinvest_profits=True, position_sizing_config=None,
@@ -1171,7 +1337,35 @@ class PortfolioEngine:
                         print(f"EMA_200 range: {regime_data['EMA_200'].min():.2f} - {regime_data['EMA_200'].max():.2f}")
             except Exception as e:
                 print(f"Could not load regime index data: {e}")
-        
+
+        # ── Load Nifty Put Hedge data if action is 'Nifty Put Hedge' ──────────
+        put_hedge_df = None
+        is_put_hedge_regime = (
+            regime_config is not None
+            and regime_config.get('action') == 'Nifty Put Hedge'
+        )
+        if is_put_hedge_regime:
+            put_hedge_config_inner = regime_config.get('put_hedge_config', {})
+            _from = self.start_date
+            _to   = self.end_date
+            _offset      = put_hedge_config_inner.get('strike_offset', 0)
+            _expiry_type = put_hedge_config_inner.get('expiry_type', 'WEEKLY')
+            try:
+                from nifty_put_hedge import load_or_build_hedge_data
+                put_hedge_df = load_or_build_hedge_data(
+                    _from, _to,
+                    strike_offset=_offset,
+                    expiry_type=_expiry_type,
+                    use_fallback_if_empty=True,
+                )
+                if put_hedge_df is not None and not put_hedge_df.empty:
+                    print(f"[PUT HEDGE] Loaded {len(put_hedge_df)} days of put data for backtest.")
+                else:
+                    print("[PUT HEDGE] No put data available — hedge events will be skipped.")
+            except Exception as e:
+                print(f"[PUT HEDGE] Failed to load hedge data: {e}. Hedge events will be skipped.")
+                put_hedge_df = None
+
         # Get common date range
         all_dates = sorted(list(set().union(*[df.index for df in self.data.values()])))
         
@@ -1187,7 +1381,13 @@ class PortfolioEngine:
         regime_cash_reserve = 0
         last_known_prices = {}  # Track last known prices for holdings (for data gaps)
         risk_events = []  # Track risk management exits
-        
+
+        # Put Hedge state tracking
+        put_hedge_position  = {}   # {'lots', 'premium_paid', 'entry_date', 'lot_size'}
+        hedge_total_cost    = 0.0  # Cumulative premium paid
+        hedge_total_proceeds = 0.0  # Cumulative proceeds from closing hedges
+        hedge_event_count   = 0    # Number of hedge activations
+
         # EQUITY regime filter tracking
         peak_equity = self.initial_capital  # Track highest ACTUAL equity reached
         theoretical_peak = self.initial_capital  # Track highest THEORETICAL equity reached (for recovery check)
@@ -1487,7 +1687,7 @@ class PortfolioEngine:
                             allocation_pct = total_alloc / 100.0
                             uncorrelated_target = investable_capital * allocation_pct
                         regime_active = True
-                        
+
                     elif regime_action == 'Half Portfolio':
                         # ALWAYS 50% to stocks, uncorrelated from remaining 50%
                         stocks_target = investable_capital * 0.5
@@ -1498,11 +1698,57 @@ class PortfolioEngine:
                             # Uncorrelated from the OTHER 50% (cash reserve)
                             uncorrelated_target = (investable_capital * 0.5) * allocation_pct
                         regime_active = True
+
+                    elif regime_action == 'Nifty Put Hedge':
+                        # ── NEW: Buy NIFTY ATM Puts as hedge ────────────────────
+                        put_hedge_cfg  = regime_config.get('put_hedge_config', {})
+                        keep_stocks    = put_hedge_cfg.get('keep_stocks', True)
+
+                        if keep_stocks:
+                            # Keep full equity exposure AND add put hedge
+                            stocks_target     = investable_capital
+                            uncorrelated_target = 0.0
+                        else:
+                            # Sell stocks, use capital to buy puts (handled below)
+                            stocks_target     = 0.0
+                            uncorrelated_target = 0.0
+
+                        # Buy puts if we don't already have an open hedge
+                        if not put_hedge_position and put_hedge_df is not None:
+                            cash, put_hedge_position, hedge_cost_now = self._apply_put_hedge(
+                                date, cash, holdings, put_hedge_df, put_hedge_cfg
+                            )
+                            if hedge_cost_now > 0:
+                                hedge_total_cost  += hedge_cost_now
+                                hedge_event_count += 1
+                                # Reduce investable capital by hedge cost if keep_stocks=False
+                                if not keep_stocks:
+                                    investable_capital = max(cash, 0)
+                        elif put_hedge_position:
+                            print(f"[PUT HEDGE] Hedge already active ({put_hedge_position.get('lots',0)} lots). Skipping re-buy.")
+                        else:
+                            print("[PUT HEDGE] No put data — falling back to Go Cash.")
+                            stocks_target = 0.0
+
+                        regime_active = True
+
                 else:
-                    # No regime triggered - 100% to stocks, NO uncorrelated
-                    regime_active = False
+                    # ── No regime triggered ──────────────────────────────────────
+                    # If we had an active put hedge, close it now (recovery)
+                    if put_hedge_position:
+                        proceeds = self._close_put_hedge(date, put_hedge_position, put_hedge_df)
+                        cash += proceeds
+                        hedge_total_proceeds += proceeds
+                        put_hedge_position = {}
+                        # Recalculate investable capital after receiving proceeds
+                        if reinvest_profits:
+                            investable_capital = float(cash)
+                        else:
+                            investable_capital = min(float(cash), self.initial_capital)
+
+                    regime_active     = False
                     uncorrelated_target = 0.0
-                    stocks_target = investable_capital
+                    stocks_target     = investable_capital
                 
                 # Debug: Log allocations on rebalance days
                 if stocks_target == 0:
@@ -1865,6 +2111,7 @@ class PortfolioEngine:
                 'Portfolio Value': total_value,
                 'Positions': len(holdings),
                 'Regime_Active': regime_active,
+                'Put_Hedge_Active': bool(put_hedge_position),
                 'Peak_Equity': peak_equity,
                 'Drawdown_Pct': current_dd,
                 'Equity_Regime_Active': equity_regime_active if is_equity_regime else False,
@@ -1881,6 +2128,18 @@ class PortfolioEngine:
         self.final_last_known_prices = last_known_prices.copy()  # {ticker: price}
         self.final_cash = cash
         
+        # Store put hedge summary for metrics
+        self.put_hedge_summary = {
+            'total_cost':     hedge_total_cost,
+            'total_proceeds': hedge_total_proceeds,
+            'event_count':    hedge_event_count,
+            'net_pnl':        hedge_total_proceeds - hedge_total_cost,
+            'efficiency_pct': (
+                ((hedge_total_proceeds - hedge_total_cost) / hedge_total_cost * 100)
+                if hedge_total_cost > 0 else 0.0
+            ),
+        } if is_put_hedge_regime else None
+
         # Store regime analysis data for ANY regime filter (for comparison)
         if has_regime_filter and theoretical_history:
             self.equity_regime_analysis = {
@@ -2151,6 +2410,9 @@ class PortfolioEngine:
             tail_losses = returns_array[returns_array <= cutoff]
             cvar_5 = tail_losses.mean() * 100 if len(tail_losses) > 0 else 0
 
+        # ── Put Hedge metrics ───────────────────────────────────────────────
+        hedge_summary = getattr(self, 'put_hedge_summary', None) or {}
+
         return {
             'Final Value': final_value,
             'Total Return': total_return,
@@ -2181,7 +2443,13 @@ class PortfolioEngine:
             'MAE Median %': mae_median,
             'MAE 95% %': mae_95,
             'MAE Max %': mae_max,
-            'CVaR 5% %': cvar_5
+            'CVaR 5% %': cvar_5,
+            # Put Hedge metrics (0 when hedge not used)
+            'Hedge Cost Total': hedge_summary.get('total_cost', 0.0),
+            'Hedge Proceeds Total': hedge_summary.get('total_proceeds', 0.0),
+            'Hedge Net PnL': hedge_summary.get('net_pnl', 0.0),
+            'Hedge Efficiency %': hedge_summary.get('efficiency_pct', 0.0),
+            'Hedge Events': hedge_summary.get('event_count', 0),
         }
 
     def get_monthly_returns(self):

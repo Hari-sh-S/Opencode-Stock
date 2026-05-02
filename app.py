@@ -177,7 +177,7 @@ if kite_trader.is_kite_configured():
             st.error("❌ Zerodha login failed. Please try again.")
 
 # Main Tabs
-main_tabs = st.tabs(["Backtest", "Backtest Logs", "Execute Trades", "Data Download"])
+main_tabs = st.tabs(["Backtest", "Backtest Logs", "Execute Trades", "Data Download", "🔐 Dhan Auth"])
 
 # ==================== TAB 1: BACKTEST ====================
 with main_tabs[0]:
@@ -486,14 +486,50 @@ with main_tabs[0]:
                                                  help="Index whose constituents to use for breadth calculation")
                     regime_value = breadth_threshold
                 
-                action_options = ["Go Cash", "Half Portfolio"]
+                action_options = ["Go Cash", "Half Portfolio", "Nifty Put Hedge"]
                 saved_action = saved_regime.get('action', 'Go Cash')
                 action_idx = action_options.index(saved_action) if saved_action in action_options else 0
                 regime_action = st.selectbox("Regime Filter Action",
                                             action_options,
                                             index=action_idx,
-                                            help="Action when regime filter triggers")
-                
+                                            help="Go Cash: Move to cash | Half Portfolio: Keep 50% stocks | Nifty Put Hedge: Buy NIFTY ATM Puts via Dhan API")
+
+                # ── Nifty Put Hedge sub-settings ────────────────────────────
+                put_hedge_config = None
+                if regime_action == "Nifty Put Hedge":
+                    saved_phc = saved_regime.get('put_hedge_config', {})
+                    st.markdown("""
+                    <div style='background:rgba(255,165,0,0.1);border-left:3px solid orange;
+                                padding:8px 12px;border-radius:4px;margin:6px 0;'>
+                    🛡️ <b>Nifty Put Hedge</b>: When regime triggers, buys NIFTY ATM <b>Weekly</b> Puts
+                    using delta-neutral sizing. Requires Dhan Data API subscription
+                    (falls back to VIX/Black-Scholes when unavailable).
+                    Strike: ATM &nbsp;|&nbsp; Expiry: Weekly rolling
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    ph_col1, ph_col2 = st.columns(2)
+                    with ph_col1:
+                        hedge_ratio = st.slider(
+                            "Hedge Ratio", 0.25, 1.5,
+                            float(saved_phc.get('hedge_ratio', 1.0)), step=0.05,
+                            key="put_hedge_ratio",
+                            help="1.0 = full delta-neutral | 0.5 = half hedge | 1.5 = over-hedge"
+                        )
+                    with ph_col2:
+                        keep_stocks = st.checkbox(
+                            "Keep Stocks + Add Puts",
+                            value=saved_phc.get('keep_stocks', True),
+                            key="put_hedge_keep_stocks",
+                            help="Checked: hold stocks AND buy puts (insurance). Unchecked: sell stocks, use cash for puts."
+                        )
+
+                    put_hedge_config = {
+                        'hedge_ratio':    hedge_ratio,
+                        'keep_stocks':    keep_stocks,
+                        'portfolio_beta': 1.0,  # Assumed beta vs NIFTY
+                    }
+
                 # Show index selector for regime types that use index data
                 if regime_type not in ["EQUITY", "EQUITY_MA", "BREADTH"]:
                     index_options = ["Stock"] + sorted(get_all_universe_names())
@@ -502,7 +538,7 @@ with main_tabs[0]:
                     regime_index = st.selectbox("Regime Filter Index", index_options, index=index_idx)
                 else:
                     regime_index = None
-                
+
                 # Exit check frequency option (not applicable for EQUITY which always checks daily)
                 if regime_type not in ["EQUITY"]:
                     exit_check_options = ["Intraday (Daily Check)", "Rebalance Day Only"]
@@ -514,7 +550,7 @@ with main_tabs[0]:
                                              help="Intraday: Exit immediately when regime triggers | Rebalance Day: Only check on rebalance days")
                 else:
                     exit_check = "Intraday (Daily Check)"  # EQUITY always uses daily check
-                
+
                 regime_config = {
                     'type': regime_type,
                     'value': regime_value,
@@ -528,7 +564,8 @@ with main_tabs[0]:
                     'atr_buffer': atr_buffer if regime_type == "SWING_ATR" else None,
                     'breadth_threshold': breadth_threshold if regime_type == "BREADTH" else None,
                     'breadth_index': breadth_index.replace(' ', '') if regime_type == "BREADTH" and breadth_index else None,
-                    'exit_check': exit_check
+                    'exit_check': exit_check,
+                    'put_hedge_config': put_hedge_config,  # None unless action=="Nifty Put Hedge"
                 }
                 
                 # Uncorrelated Asset
@@ -1157,7 +1194,47 @@ with main_tabs[0]:
                                 charges_col2.write(f"**Stamp Charges (0.015%):** ₹{metrics.get('Stamp Charges', 0):,.2f}")
                                 charges_col2.write(f"**GST (18%):** ₹{metrics.get('GST', 0):,.2f}")
                                 charges_col2.write(f"**Total Charges:** ₹{metrics.get('Total Charges', 0):,.2f}")
-                            
+
+                            # ── Put Hedge Analysis (only shown when Nifty Put Hedge regime was used) ──
+                            if metrics.get('Hedge Events', 0) > 0:
+                                st.markdown("---")
+                                st.markdown("""
+                                <div style='background:rgba(255,165,0,0.12);border-left:4px solid orange;
+                                            padding:10px 16px;border-radius:6px;margin-bottom:10px;'>
+                                🛡️ <b>Nifty Put Hedge Analysis</b>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                                hcol1, hcol2, hcol3, hcol4, hcol5 = st.columns(5)
+                                hcol1.metric(
+                                    "Hedge Events",
+                                    int(metrics.get('Hedge Events', 0)),
+                                    help="Number of times put hedge was activated"
+                                )
+                                hcol2.metric(
+                                    "Hedge Cost",
+                                    f"₹{metrics.get('Hedge Cost Total', 0):,.0f}",
+                                    help="Total premium paid for put options"
+                                )
+                                hcol3.metric(
+                                    "Hedge Proceeds",
+                                    f"₹{metrics.get('Hedge Proceeds Total', 0):,.0f}",
+                                    help="Total proceeds from closing put positions"
+                                )
+                                hedge_pnl = metrics.get('Hedge Net PnL', 0)
+                                hcol4.metric(
+                                    "Hedge Net P&L",
+                                    f"₹{hedge_pnl:,.0f}",
+                                    delta=f"{hedge_pnl:,.0f}",
+                                    delta_color="normal",
+                                    help="Net profit/loss from all put hedge positions"
+                                )
+                                hcol5.metric(
+                                    "Hedge Efficiency",
+                                    f"{metrics.get('Hedge Efficiency %', 0):.1f}%",
+                                    help="(Proceeds - Cost) / Cost × 100"
+                                )
+
                             # Original download buttons removed (consolidated above)
                         with result_tabs[1]:
                             st.markdown("### Performance Charts")
@@ -3071,3 +3148,158 @@ with main_tabs[3]:
                 st.error(f"❌ Download failed: {e}")
 
 
+# ==================== TAB 5: DHAN AUTH ====================
+with main_tabs[4]:
+    st.markdown("### 🔐 Dhan API Authentication")
+    st.markdown("""
+    <div style='background:rgba(30,144,255,0.1);border-left:4px solid #1e90ff;
+                padding:12px 16px;border-radius:6px;margin-bottom:16px;'>
+    Authenticate with Dhan using your <b>Client ID + PIN + TOTP</b>.<br>
+    Client ID and PIN are saved once. Only enter your TOTP (from your authenticator app) each session.
+    </div>
+    """, unsafe_allow_html=True)
+
+    from config import get_saved_credentials, save_credentials_to_env, authenticate_dhan
+
+    creds = get_saved_credentials()
+
+    # ── Saved Credentials Section ───────────────────────────────────────────
+    with st.expander("⚙️ Saved Credentials (Client ID & PIN)", expanded=not bool(creds.get('client_id'))):
+        st.caption("These are saved permanently to your .env file. You only need to set them once.")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            input_client_id = st.text_input(
+                "Dhan Client ID",
+                value=creds.get('client_id', ''),
+                key="dhan_auth_client_id",
+                placeholder="e.g. 1000000001",
+                help="Your Dhan trading account client ID"
+            )
+        with c2:
+            input_pin = st.text_input(
+                "PIN",
+                value=creds.get('pin', ''),
+                type="password",
+                key="dhan_auth_pin",
+                placeholder="Your 5-digit Dhan PIN",
+                help="Your Dhan account PIN (stored securely in .env)"
+            )
+
+        if st.button("💾 Save Client ID & PIN", key="save_dhan_creds_btn"):
+            if input_client_id.strip() and input_pin.strip():
+                save_credentials_to_env(client_id=input_client_id.strip(), pin=input_pin.strip())
+                st.success("✅ Client ID and PIN saved to .env file.")
+                st.rerun()
+            else:
+                st.error("❌ Please enter both Client ID and PIN before saving.")
+
+        # Show current status
+        if creds.get('client_id'):
+            cid = creds['client_id']
+            masked = cid[:3] + '*' * max(0, len(cid) - 6) + cid[-3:] if len(cid) > 6 else cid
+            st.success(f"✅ Client ID saved: `{masked}`")
+        else:
+            st.warning("⚠️ Client ID not set")
+
+    st.markdown("---")
+
+    # ── TOTP Authentication ───────────────────────────────────────────────
+    st.markdown("#### 🔢 Enter TOTP to Generate Access Token")
+    st.caption("Open your authenticator app (Google Authenticator / DhanHQ app) and enter the 6-digit code.")
+
+    totp_col, btn_col = st.columns([2, 1])
+    with totp_col:
+        totp_input = st.text_input(
+            "TOTP (6 digits)",
+            key="dhan_totp_input",
+            max_chars=6,
+            placeholder="123456",
+            help="6-digit time-based OTP from your authenticator app",
+            label_visibility="collapsed"
+        )
+    with btn_col:
+        auth_btn = st.button("🔑 Authenticate", type="primary", key="dhan_auth_btn",
+                             use_container_width=True)
+
+    if auth_btn:
+        if not totp_input or len(totp_input.strip()) != 6:
+            st.error("❌ Please enter a valid 6-digit TOTP.")
+        else:
+            with st.spinner("Authenticating with Dhan..."):
+                result = authenticate_dhan(totp_input.strip())
+
+            if result['success']:
+                st.success(result['message'])
+                st.balloons()
+            else:
+                st.error(f"❌ Authentication failed: {result['message']}")
+
+    st.markdown("---")
+
+    # ── Connection Test ────────────────────────────────────────────────
+    st.markdown("#### 📡 Test Dhan API Connection")
+
+    # Current token status
+    fresh_creds = get_saved_credentials()
+    token = fresh_creds.get('access_token', '')
+    if token:
+        masked_token = token[:8] + '...' + token[-4:]
+        st.info(f"Current token: `{masked_token}` ({len(token)} chars)")
+    else:
+        st.warning("⚠️ No access token saved. Authenticate above first.")
+
+    if st.button("🔍 Test Connection", key="dhan_test_conn_btn"):
+        with st.spinner("Testing Dhan API..."):
+            try:
+                from config import get_dhan_client, validate_credentials, DHAN_CLIENT_ID
+                validate_credentials()
+                dhan_test = get_dhan_client()
+                st.success("✅ Dhan client created successfully.")
+
+                # Test: fetch recent RELIANCE data
+                from datetime import date as _date, timedelta
+                _from = (_date.today() - timedelta(days=10)).strftime('%Y-%m-%d')
+                _to   = _date.today().strftime('%Y-%m-%d')
+                resp  = dhan_test.historical_daily_data(
+                    security_id="1333",          # RELIANCE
+                    exchange_segment="NSE_EQ",
+                    instrument_type="EQUITY",
+                    from_date=_from,
+                    to_date=_to,
+                )
+                if isinstance(resp, dict) and resp.get('status') == 'success':
+                    pts = len(resp.get('data', {}).get('timestamp', []))
+                    st.success(f"✅ API Test Passed! RELIANCE: {pts} data points returned.")
+                elif isinstance(resp, dict):
+                    st.warning(f"⚠️ API responded but status unknown: {str(resp)[:200]}")
+                else:
+                    st.info(f"✅ Client works. Response: {str(resp)[:200]}")
+
+                # Test: rolling options data availability
+                st.markdown("---")
+                st.markdown("**🛡️ Rolling Options Data (for Put Hedge)**")
+                try:
+                    _opts_resp = dhan_test.rolling_options_data(
+                        exchange_segment="NSE_FNO",
+                        instrument="OPTIDX",
+                        drvOptionType="PUT",
+                        fromDate=(_date.today() - timedelta(days=7)).strftime('%Y-%m-%d'),
+                        toDate=_date.today().strftime('%Y-%m-%d'),
+                        strike="ATM",
+                        expiryType="WEEKLY",
+                    )
+                    if isinstance(_opts_resp, dict) and _opts_resp.get('status') == 'success':
+                        _pts = len(_opts_resp.get('data', {}).get('timestamp', []))
+                        st.success(f"✅ Rolling Options API works! {_pts} data points for ATM PUT (last 7 days).")
+                    else:
+                        st.warning(f"⚠️ Rolling Options: {str(_opts_resp)[:300]}")
+                except AttributeError:
+                    st.info("⚠️ `rolling_options_data` method not found in SDK — will use direct REST API.")
+                except Exception as oe:
+                    st.warning(f"⚠️ Rolling Options test failed: {oe}")
+
+            except ValueError as ve:
+                st.error(f"❌ Credentials error: {ve}")
+            except Exception as e:
+                st.error(f"❌ Connection failed: {e}")
