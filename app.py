@@ -531,10 +531,31 @@ with main_tabs[0]:
                             key="put_hedge_keep_stocks",
                             help="Checked: hold stocks AND buy puts (insurance). Unchecked: sell stocks, use cash for puts."
                         )
+                        
+                    ph_col3, ph_col4 = st.columns(2)
+                    with ph_col3:
+                        expiry_type_options = ["WEEKLY", "MONTHLY"]
+                        saved_expiry_type = saved_phc.get('expiry_type', 'WEEKLY')
+                        expiry_type_idx = expiry_type_options.index(saved_expiry_type) if saved_expiry_type in expiry_type_options else 0
+                        expiry_type = st.selectbox(
+                            "Option Expiry",
+                            expiry_type_options,
+                            index=expiry_type_idx,
+                            key="put_hedge_expiry_type"
+                        )
+                    with ph_col4:
+                        roll_expiries = st.checkbox(
+                            "Roll Expiries (Continuous)",
+                            value=saved_phc.get('roll_expiries', True),
+                            key="put_hedge_roll_expiries",
+                            help="Checked: continually re-buy when options expire. Unchecked: one-time hedge per rebalance."
+                        )
 
                     put_hedge_config = {
                         'hedge_ratio':    hedge_ratio,
                         'keep_stocks':    keep_stocks,
+                        'expiry_type':    expiry_type,
+                        'roll_expiries':  roll_expiries,
                         'portfolio_beta': 1.0,  # Assumed beta vs NIFTY
                     }
 

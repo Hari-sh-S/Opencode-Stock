@@ -55,7 +55,7 @@ def get_atm_strike(nifty_spot: float) -> int:
     return int(round(nifty_spot / NIFTY_STRIKE_STEP) * NIFTY_STRIKE_STEP)
 
 
-def get_next_weekly_expiry(from_dt) -> date:
+def get_next_expiry(from_dt, expiry_type="WEEKLY") -> date:
     """
     Get next Thursday (NIFTY weekly expiry) after from_dt.
     If from_dt is Thursday, returns NEXT Thursday (assuming trade has just started).
@@ -268,7 +268,7 @@ def build_fallback_put_series(from_date, to_date) -> pd.DataFrame:
         else:
             iv = 15.0
 
-        expiry  = get_next_weekly_expiry(dt.date() if hasattr(dt, 'date') else dt)
+        expiry  = get_next_expiry(dt.date() if hasattr(dt, 'date') else dt, expiry_type)
         dte     = max((expiry - (dt.date() if hasattr(dt, 'date') else dt)).days, 1)
         premium = _bs_atm_put(float(spot), iv, dte)
         strike  = get_atm_strike(float(spot))
@@ -357,7 +357,7 @@ def _parse_rolling_response(response_data: dict) -> pd.DataFrame:
     return daily
 
 
-def _fetch_chunk(dhan_client, from_dt: date, to_dt: date) -> pd.DataFrame:
+def _fetch_chunk(dhan_client, from_dt: date, to_dt: date, expiry_type="WEEKLY") -> pd.DataFrame:
     """Fetch one ≤30-day chunk of NIFTY ATM weekly put data."""
     # Try SDK method first
     if dhan_client is not None:
@@ -369,7 +369,7 @@ def _fetch_chunk(dhan_client, from_dt: date, to_dt: date) -> pd.DataFrame:
                 fromDate=from_dt.strftime("%Y-%m-%d"),
                 toDate=to_dt.strftime("%Y-%m-%d"),
                 strike="ATM",
-                expiryType="WEEKLY",
+                expiryType=expiry_type,
             )
             if isinstance(resp, dict) and resp.get("status") == "success":
                 return _parse_rolling_response(resp)
@@ -380,7 +380,7 @@ def _fetch_chunk(dhan_client, from_dt: date, to_dt: date) -> pd.DataFrame:
     return _fetch_chunk_rest(from_dt, to_dt)
 
 
-def _fetch_chunk_rest(from_dt: date, to_dt: date) -> pd.DataFrame:
+def _fetch_chunk_rest(from_dt: date, to_dt: date, expiry_type="WEEKLY") -> pd.DataFrame:
     """Direct REST call to Dhan Rolling Options endpoint."""
     try:
         from config import get_saved_credentials
@@ -405,7 +405,7 @@ def _fetch_chunk_rest(from_dt: date, to_dt: date) -> pd.DataFrame:
         "fromDate":        from_dt.strftime("%Y-%m-%d"),
         "toDate":          to_dt.strftime("%Y-%m-%d"),
         "strike":          "ATM",
-        "expiryType":      "WEEKLY",
+        "expiryType":      expiry_type,
     }
 
     try:
@@ -498,7 +498,7 @@ def fetch_rolling_options_data(
 
 # ─── Master Loader ────────────────────────────────────────────────────────────
 
-def load_or_build_hedge_data(from_date, to_date, use_fallback: bool = True) -> pd.DataFrame:
+def load_or_build_hedge_data(from_date, to_date, expiry_type="WEEKLY", use_fallback: bool = True) -> pd.DataFrame:
     """
     Try Dhan API → fall back to VIX/B-S estimates.
     Dates before DATA_AVAILABLE_FROM are excluded.
@@ -518,13 +518,14 @@ def load_or_build_hedge_data(from_date, to_date, use_fallback: bool = True) -> p
         return pd.DataFrame()
 
     # Try API
-    api_df = fetch_rolling_options_data(eff_from, to_date)
+    api_df = fetch_rolling_options_data(eff_from, to_date, expiry_type=expiry_type)
     if not api_df.empty:
         return api_df
 
     # Fallback
     if use_fallback:
         print("[PUT HEDGE] Falling back to VIX/Black-Scholes estimates.")
-        return build_fallback_put_series(eff_from, to_date)
+        return build_fallback_put_series(eff_from, to_date, expiry_type)
 
     return pd.DataFrame()
+

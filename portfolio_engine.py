@@ -1064,7 +1064,7 @@ class PortfolioEngine:
         """
         from nifty_put_hedge import (
             get_put_premium_on_date, get_nifty_spot_on_date,
-            get_atm_strike, get_next_weekly_expiry, get_option_ticker_name,
+            get_atm_strike, get_next_expiry, get_option_ticker_name,
             delta_neutral_lots, get_nifty_lot_size, build_fallback_put_series,
         )
 
@@ -1088,9 +1088,10 @@ class PortfolioEngine:
             print(f"[PUT HEDGE] Cannot determine NIFTY spot on {date}. Skipping hedge.")
             return cash, {}, 0.0
 
-        # ── ATM strike & next weekly expiry ──────────────────────────────────
+        # ── ATM strike & next expiry ─────────────────────────────────────────
         atm_strike  = get_atm_strike(nifty_spot)
-        expiry_date = get_next_weekly_expiry(as_of_date)
+        expiry_type = put_hedge_config.get('expiry_type', 'WEEKLY')
+        expiry_date = get_next_expiry(as_of_date, expiry_type=expiry_type)
         option_ticker = get_option_ticker_name(atm_strike, expiry_date)
 
         # ── Put premium ──────────────────────────────────────────────────────
@@ -1101,7 +1102,7 @@ class PortfolioEngine:
 
         if put_premium <= 0:
             # On-the-fly VIX/B-S fallback for this single date
-            fallback_df = build_fallback_put_series(as_of_date, as_of_date)
+            fallback_df = build_fallback_put_series(as_of_date, as_of_date, expiry_type=expiry_type)
             if fallback_df is not None and not fallback_df.empty:
                 put_premium = get_put_premium_on_date(
                     pd.Timestamp(as_of_date), fallback_df
@@ -1443,9 +1444,11 @@ class PortfolioEngine:
                         hedge_total_proceeds += proceeds
                         put_hedge_position = {}
                         
-                        # 2. If it's NOT a rebalance day, re-buy immediately if regime is still active.
-                        if not is_rebalance and regime_action == 'Nifty Put Hedge' and regime_config is not None:
-                            put_hedge_cfg = regime_config.get('put_hedge_config', {})
+                        # 2. If it's NOT a rebalance day, re-buy immediately if regime is still active AND rolling is enabled.
+                        put_hedge_cfg = regime_config.get('put_hedge_config', {}) if regime_config else {}
+                        roll_expiries = put_hedge_cfg.get('roll_expiries', True)
+                        
+                        if not is_rebalance and regime_action == 'Nifty Put Hedge' and roll_expiries:
                             cash, put_hedge_position, hedge_cost_now = self._apply_put_hedge(
                                 date, cash, holdings, put_hedge_df, put_hedge_cfg
                             )
