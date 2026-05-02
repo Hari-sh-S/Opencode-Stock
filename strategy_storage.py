@@ -2,7 +2,7 @@
 Strategy Storage Module
 
 Saves and loads strategy configurations to/from Hugging Face Datasets.
-Strategies are stored in the 'strategies/' folder within the existing HF repo.
+Strategies are stored in the 'strategy_templates/' folder within the existing HF repo.
 """
 
 import os
@@ -42,7 +42,7 @@ def _get_strategy_path(name: str) -> str:
     # Sanitize name for filename
     safe_name = "".join(c for c in name if c.isalnum() or c in "._- ").strip()
     safe_name = safe_name.replace(" ", "_")
-    return f"strategies/{safe_name}.json"
+    return f"strategy_templates/{safe_name}.json"
 
 
 def save_strategy(name: str, config: Dict) -> bool:
@@ -161,9 +161,9 @@ def list_strategies() -> List[str]:
         # Extract strategy names from file paths
         strategies = []
         for f in files:
-            if f.startswith("strategies/") and f.endswith(".json"):
-                # Remove "strategies/" and ".json"
-                name = f[11:-5].replace("_", " ")
+            if f.startswith("strategy_templates/") and f.endswith(".json"):
+                # Remove "strategy_templates/" and ".json"
+                name = f[19:-5].replace("_", " ")
                 strategies.append(name)
         
         return sorted(strategies)
