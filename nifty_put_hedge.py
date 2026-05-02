@@ -215,7 +215,7 @@ def _bs_atm_put(spot: float, iv_pct: float, days_to_expiry: int = 5) -> float:
     return spot * sigma * math.sqrt(T / (2 * math.pi))
 
 
-def build_fallback_put_series(from_date, to_date) -> pd.DataFrame:
+def build_fallback_put_series(from_date, to_date, expiry_type="WEEKLY") -> pd.DataFrame:
     """
     Build ATM Put premium estimates using India VIX + Black-Scholes.
     Used when Dhan API is unavailable.
