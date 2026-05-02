@@ -1341,8 +1341,8 @@ with main_tabs[0]:
                             if not engine.trades_df.empty:
                                 # Create consolidated trade view matching BUY with SELL
                                 trades_df = engine.trades_df.copy()
-                                buy_trades = trades_df[trades_df['Action'] == 'BUY'].copy()
-                                sell_trades = trades_df[trades_df['Action'] == 'SELL'].copy()
+                                buy_trades = trades_df[trades_df['Action'].isin(['BUY', 'BUY_HEDGE'])].copy()
+                                sell_trades = trades_df[trades_df['Action'].isin(['SELL', 'SELL_HEDGE'])].copy()
                                 
                                 consolidated_trades = []
                                 
@@ -1519,8 +1519,8 @@ with main_tabs[0]:
                                     
                                     # Build trades DataFrame (same structure as CSV export)
                                     trades_for_mc = []
-                                    buy_trades = engine.trades_df[engine.trades_df['Action'] == 'BUY']
-                                    sell_trades = engine.trades_df[engine.trades_df['Action'] == 'SELL']
+                                    buy_trades = engine.trades_df[engine.trades_df['Action'].isin(['BUY', 'BUY_HEDGE'])]
+                                    sell_trades = engine.trades_df[engine.trades_df['Action'].isin(['SELL', 'SELL_HEDGE'])]
                                     
                                     for ticker in sell_trades['Ticker'].unique():
                                         ticker_sells = sell_trades[sell_trades['Ticker'] == ticker]
