@@ -1410,6 +1410,9 @@ class PortfolioEngine:
         # Flag to track theoretical equity for ANY regime filter (for comparison)
         has_regime_filter = regime_config is not None
         
+        # Track regime_action state across non-rebalance days for weekly options rolling
+        regime_action = 'none'
+        
         for date in all_dates:
             is_rebalance = date in rebalance_dates
             
@@ -1426,6 +1429,30 @@ class PortfolioEngine:
                         continue
                     current_holdings_value += shares * cp
             current_equity = cash + current_holdings_value
+            
+            # --- WEEKLY PUT HEDGE ROLL LOGIC ---
+            if put_hedge_position and put_hedge_df is not None:
+                expiry_str = put_hedge_position.get('expiry_date')
+                if expiry_str:
+                    expiry_dt = pd.Timestamp(expiry_str)
+                    current_dt = pd.Timestamp(date)
+                    if current_dt >= expiry_dt:
+                        # 1. Close expired option
+                        proceeds = self._close_put_hedge(date, put_hedge_position, put_hedge_df)
+                        cash += proceeds
+                        hedge_total_proceeds += proceeds
+                        put_hedge_position = {}
+                        
+                        # 2. If it's NOT a rebalance day, re-buy immediately if regime is still active.
+                        if not is_rebalance and regime_action == 'Nifty Put Hedge' and regime_config is not None:
+                            put_hedge_cfg = regime_config.get('put_hedge_config', {})
+                            cash, put_hedge_position, hedge_cost_now = self._apply_put_hedge(
+                                date, cash, holdings, put_hedge_df, put_hedge_cfg
+                            )
+                            if hedge_cost_now > 0:
+                                hedge_total_cost += hedge_cost_now
+                                hedge_event_count += 1
+            # -----------------------------------
             
             # Track theoretical equity (without ANY regime filter affecting trades)
             if has_regime_filter:
