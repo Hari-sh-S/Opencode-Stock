@@ -1338,33 +1338,31 @@ class PortfolioEngine:
             except Exception as e:
                 print(f"Could not load regime index data: {e}")
 
-        # ── Load Nifty Put Hedge data if action is 'Nifty Put Hedge' ──────────
+        # ── Load Nifty Put Hedge data if action is 'Nifty Put Hedge' ────────────
         put_hedge_df = None
         is_put_hedge_regime = (
             regime_config is not None
             and regime_config.get('action') == 'Nifty Put Hedge'
         )
         if is_put_hedge_regime:
-            put_hedge_config_inner = regime_config.get('put_hedge_config', {})
             _from = self.start_date
             _to   = self.end_date
-            _offset      = put_hedge_config_inner.get('strike_offset', 0)
-            _expiry_type = put_hedge_config_inner.get('expiry_type', 'WEEKLY')
             try:
                 from nifty_put_hedge import load_or_build_hedge_data
+                # New signature: (from_date, to_date, use_fallback=True)
+                # No strike_offset or expiry_type — always ATM Weekly per design
                 put_hedge_df = load_or_build_hedge_data(
                     _from, _to,
-                    strike_offset=_offset,
-                    expiry_type=_expiry_type,
-                    use_fallback_if_empty=True,
+                    use_fallback=True,
                 )
                 if put_hedge_df is not None and not put_hedge_df.empty:
                     print(f"[PUT HEDGE] Loaded {len(put_hedge_df)} days of put data for backtest.")
                 else:
-                    print("[PUT HEDGE] No put data available — hedge events will be skipped.")
+                    print("[PUT HEDGE] No API data — VIX/B-S fallback will apply per rebalance date.")
+                    put_hedge_df = pd.DataFrame()   # Empty DF: per-date fallback still fires
             except Exception as e:
-                print(f"[PUT HEDGE] Failed to load hedge data: {e}. Hedge events will be skipped.")
-                put_hedge_df = None
+                print(f"[PUT HEDGE] Failed to load hedge data: {e}. Per-date fallback will apply.")
+                put_hedge_df = pd.DataFrame()       # Empty DF, not None — allows per-date fallback
 
         # Get common date range
         all_dates = sorted(list(set().union(*[df.index for df in self.data.values()])))
@@ -1714,7 +1712,7 @@ class PortfolioEngine:
                             uncorrelated_target = 0.0
 
                         # Buy puts if we don't already have an open hedge
-                        if not put_hedge_position and put_hedge_df is not None:
+                        if not put_hedge_position:
                             cash, put_hedge_position, hedge_cost_now = self._apply_put_hedge(
                                 date, cash, holdings, put_hedge_df, put_hedge_cfg
                             )
