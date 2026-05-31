@@ -1446,58 +1446,19 @@ with main_tabs[0]:
                                 else:
                                     st.info("No completed trades to display")
                                 
-                                # Show Open Positions (BUY trades without matching SELL)
-                                # Find buys that don't have a corresponding sell yet
-                                sold_tickers_dates = set()
-                                for _, sell in sell_trades.iterrows():
-                                    # Find the buy this sell matched with
-                                    ticker = sell['Ticker']
-                                    sell_date = sell['Date']
-                                    prev_buys = buy_trades[
-                                        (buy_trades['Ticker'] == ticker) & 
-                                        (buy_trades['Date'] < sell_date)
-                                    ]
-                                    if not prev_buys.empty:
-                                        buy = prev_buys.iloc[-1]
-                                        sold_tickers_dates.add((ticker, buy['Date']))
-                                
-                                open_positions = []
-                                for _, buy in buy_trades.iterrows():
-                                    if (buy['Ticker'], buy['Date']) not in sold_tickers_dates:
-                                        ticker = buy['Ticker']
-                                        buy_date = buy['Date']
-                                        buy_price = float(buy['Price'])
-                                        shares = int(buy['Shares'])
-                                        
-                                        # Get current price (last available)
-                                        if ticker in engine.data and not engine.data[ticker].empty:
-                                            _close = engine.data[ticker]['Close'].iloc[-1]
-                                            current_price = float(_close.iloc[0] if hasattr(_close, 'iloc') else _close)
-                                            current_date = engine.data[ticker].index[-1]
-                                            unrealized_roi = ((current_price - buy_price) / buy_price) * 100
-                                        else:
-                                            current_price = buy_price
-                                            current_date = buy_date
-                                            unrealized_roi = 0.0
-                                        
-                                        open_positions.append({
-                                            'Stock': ticker.replace('.NS', ''),
-                                            'Buy Date': pd.to_datetime(buy_date).strftime('%Y-%m-%d'),
-                                            'Buy Price': round(buy_price, 2),
-                                            'Current Price': round(current_price, 2),
-                                            'Shares': shares,
-                                            'Unrealized ROI %': round(unrealized_roi, 2),
-                                            'Status': '🟢 OPEN'
-                                        })
+                                # Show Open Positions — use engine's final_holdings for reliability
+                                open_positions = engine.get_open_positions()
                                 
                                 if open_positions:
-                                    # Store in session state for Execute Trades tab
                                     st.session_state['open_positions'] = open_positions
-                                    st.session_state['engine_data'] = engine.data
+                                    try:
+                                        st.session_state['engine_data'] = engine.data
+                                    except:
+                                        pass
                                     
                                     st.markdown("---")
                                     st.markdown("### 📈 Open Positions (Current Holdings)")
-                                    st.caption("These are positions bought but not yet sold at the end of the backtest period.")
+                                    st.caption("Positions still held at backtest end.")
                                     
                                     open_df = pd.DataFrame(open_positions)
                                     
@@ -1514,16 +1475,6 @@ with main_tabs[0]:
                                     st.dataframe(styled_open, use_container_width=True)
                                     
                                     st.info("👉 Go to **Execute Trades** tab to place orders on Zerodha with these positions.")
-                                else:
-                                    # Fallback: try engine.get_open_positions()
-                                    fallback_positions = engine.get_open_positions()
-                                    if fallback_positions:
-                                        st.session_state['open_positions'] = fallback_positions
-                                        st.markdown("---")
-                                        st.markdown("### 📈 Open Positions (from Engine)")
-                                        st.caption("Positions still held at backtest end.")
-                                        fb_df = pd.DataFrame(fallback_positions)
-                                        st.dataframe(fb_df, use_container_width=True)
                             else:
                                 st.info("No trades executed")
                         

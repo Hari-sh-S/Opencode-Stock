@@ -2265,7 +2265,7 @@ class PortfolioEngine:
         if hasattr(self, 'trades') and self.trades:
             for trade in self.trades:
                 if trade.get('Action') == 'BUY':
-                    ticker = trade.get('Stock')
+                    ticker = trade.get('Ticker') or trade.get('Stock') or ''
                     # Keep the most recent buy price for each ticker
                     buy_prices[ticker] = trade.get('Price', 0)
         
