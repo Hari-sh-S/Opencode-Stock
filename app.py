@@ -1828,10 +1828,10 @@ with main_tabs[0]:
                                     decay_fig.add_hline(y=0, line_dash='dash', line_color='gray', row=1, col=1)
                                     
                                     decay_fig.add_trace(go.Scatter(x=rolling_vol.index, y=rolling_vol.values,
-                                                                    name='Rolling Vol', line=dict(color='#dc3545')), row=2, col=2)
+                                                                    name='Rolling Vol', line=dict(color='#dc3545')), row=2, col=1)
                                     
                                     decay_fig.add_trace(go.Scatter(x=rolling_sharpe.index, y=rolling_sharpe.values,
-                                                                    name='Rolling Sharpe', line=dict(color='#ffc107')), row=3, col=3)
+                                                                    name='Rolling Sharpe', line=dict(color='#ffc107')), row=3, col=1)
                                     decay_fig.add_hline(y=0, line_dash='dash', line_color='gray', row=3, col=3)
                                     
                                     decay_fig.update_layout(height=500, template='plotly_dark', showlegend=False)
