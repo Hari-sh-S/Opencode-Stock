@@ -51,7 +51,9 @@ def save_execution(
     capital: float,
     trades: List[Dict],
     portfolio_values: List[Dict],
-    open_positions: List[Dict] = None
+    open_positions: List[Dict] = None,
+    notes: str = "",
+    tags: List[str] = None
 ) -> bool:
     """
     Save an execution to Hugging Face.
@@ -64,6 +66,8 @@ def save_execution(
         trades: List of trade dictionaries
         portfolio_values: List of {date, value} dictionaries
         open_positions: Current open positions
+        notes: Optional notes about this execution
+        tags: Optional list of tags for categorisation
         
     Returns:
         True if saved successfully
@@ -88,6 +92,8 @@ def save_execution(
             'trades': trades,
             'portfolio_values': portfolio_values,
             'open_positions': open_positions or [],
+            'notes': notes,
+            'tags': tags or [],
             'version': '1.0'
         }
         
@@ -256,7 +262,9 @@ def list_executions() -> List[Dict]:
                         'created_at': execution_data.get('created_at', ''),
                         'last_updated': execution_data.get('last_updated', ''),
                         'capital': execution_data.get('capital', 0),
-                        'trade_count': len(execution_data.get('trades', []))
+                        'trade_count': len(execution_data.get('trades', [])),
+                        'notes': execution_data.get('notes', ''),
+                        'tags': execution_data.get('tags', [])
                     })
         
         # Sort by last_updated descending
@@ -267,6 +275,48 @@ def list_executions() -> List[Dict]:
     except Exception as e:
         print(f"Error listing executions: {e}")
         return []
+
+
+def update_execution_notes(name: str, notes: str = None, tags: List[str] = None) -> bool:
+    """Update notes and tags for an existing execution."""
+    execution = load_execution(name)
+    if not execution:
+        st.error(f"Execution '{name}' not found.")
+        return False
+    
+    try:
+        from huggingface_hub import upload_file
+        
+        token, repo = _get_hf_credentials()
+        if not token or not repo:
+            return False
+        
+        if notes is not None:
+            execution['notes'] = notes
+        if tags is not None:
+            execution['tags'] = tags
+        
+        execution['last_updated'] = datetime.now().isoformat()
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(execution, f, indent=2, default=str)
+            tmp_path = f.name
+        
+        upload_file(
+            path_or_fileobj=tmp_path,
+            path_in_repo=_get_execution_path(name),
+            repo_id=repo,
+            repo_type="dataset",
+            token=token,
+            commit_message=f"Update execution notes: {name}"
+        )
+        
+        Path(tmp_path).unlink(missing_ok=True)
+        list_executions.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error updating execution notes: {e}")
+        return False
 
 
 def delete_execution(name: str) -> bool:

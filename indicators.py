@@ -413,7 +413,17 @@ class IndicatorLibrary:
         df['Bullish_Trend'] = (df['SMA_63'] > df['SMA_126']).astype(int)
         
         return df
-    
+
+    @staticmethod
+    def add_volume_indicators(df, volume_sma_period=20):
+        """Add volume-based indicators for stock filtering."""
+        if 'Volume' not in df.columns:
+            return df
+        volume = df['Volume'].squeeze() if isinstance(df['Volume'], pd.DataFrame) else df['Volume']
+        df[f'Volume_SMA_{volume_sma_period}'] = volume.rolling(volume_sma_period).mean()
+        df['Volume_Above_SMA'] = volume > df[f'Volume_SMA_{volume_sma_period}']
+        return df
+
     @staticmethod
     def add_donchian_channels(df, exit_period=55, recovery_period=20):
         """Calculate Donchian channels for regime filter.

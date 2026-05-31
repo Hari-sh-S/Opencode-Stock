@@ -447,11 +447,12 @@ class PortfolioEngine:
         print(f"Successfully loaded {len(self.data)} stocks")
         return len(self.data) > 0
     
-    def calculate_indicators_for_formula(self, formula, regime_config=None):
+    def calculate_indicators_for_formula(self, formula, regime_config=None, filter_config=None):
         """Calculate only the indicators needed for the formula and regime filter."""
         # Determine which indicator types are needed
         needs_momentum = any(x in formula.upper() for x in ['PERFORMANCE', 'SHARPE', 'SORTINO', 'CALMAR', 'VOLATILITY', 'DRAWDOWN'])
         needs_regime = regime_config is not None and regime_config.get('type') != 'EQUITY'
+        needs_volume = filter_config is not None and filter_config.get('volume_filter', False)
         
         if not needs_momentum and not needs_regime:
             return  # No indicators needed
@@ -485,6 +486,10 @@ class PortfolioEngine:
                     
                 if needs_regime and 'EMA_200' not in df.columns:
                     df = IndicatorLibrary.add_regime_filters(df)
+                
+                if needs_volume and 'Volume_Above_SMA' not in df.columns:
+                    volume_sma_period = filter_config.get('volume_sma_period', 20)
+                    df = IndicatorLibrary.add_volume_indicators(df, volume_sma_period=volume_sma_period)
                 
                 # Flatten again after indicators (some libraries create MultiIndex)
                 if isinstance(df.columns, pd.MultiIndex):
@@ -1214,15 +1219,18 @@ class PortfolioEngine:
     def run_rebalance_strategy(self, scoring_formula, num_stocks, exit_rank, 
                               rebal_config, regime_config=None, uncorrelated_config=None, 
                               reinvest_profits=True, position_sizing_config=None,
-                              historical_universe_config=None, risk_config=None):
+                              historical_universe_config=None, risk_config=None,
+                              filter_config=None):
         """
         Advanced backtesting engine with all Sigma Scanner features.
         
         position_sizing_config: dict with 'method' (equal_weight, inverse_volatility, 
-                               score_weighted, risk_parity), 'use_cap' (bool), 'max_pct' (int)
+                                score_weighted, risk_parity), 'use_cap' (bool), 'max_pct' (int)
         historical_universe_config: dict with 'enabled' (bool), 'universe_name' (str)
                                    If enabled, uses point-in-time index constituents
         risk_config: dict with 'portfolio' and 'trade' sub-configs for intraday risk management
+        filter_config: dict with 'volume_filter' (bool), 'volume_sma_period' (int)
+                      If volume_filter is True, stocks with volume below SMA are excluded
         """
         if not self.data:
             print("No data available")
@@ -1235,7 +1243,7 @@ class PortfolioEngine:
             return
         
         # Calculate indicators on-demand based on formula
-        self.calculate_indicators_for_formula(scoring_formula, regime_config)
+        self.calculate_indicators_for_formula(scoring_formula, regime_config, filter_config)
         
         # Load regime filter index data if needed (skip for EQUITY, EQUITY_MA, and Stock-level filtering)
         if regime_config and regime_config['type'] not in ['EQUITY', 'EQUITY_MA'] and regime_config.get('index') != 'Stock':
@@ -1917,6 +1925,27 @@ class PortfolioEngine:
                         print(f"   [STOCK REGIME] {len(top_stocks) - len(filtered_top_stocks)} stocks filtered out, {len(filtered_top_stocks)} remaining")
                     top_stocks = filtered_top_stocks
                 
+                # Volume filter: exclude stocks with volume below SMA
+                if filter_config and filter_config.get('volume_filter', False) and top_stocks:
+                    volume_sma_period = filter_config.get('volume_sma_period', 20)
+                    filtered_volume_stocks = []
+                    for ticker, score in top_stocks:
+                        if ticker in self.data and not self.data[ticker].empty:
+                            row = self._get_date_row(ticker, date)
+                            if row is not None:
+                                volume_above_sma = row.get('Volume_Above_SMA', row.get(f'Volume_Above_SMA_{volume_sma_period}', True))
+                                if volume_above_sma:
+                                    filtered_volume_stocks.append((ticker, score))
+                                else:
+                                    print(f"   [VOLUME FILTER] Excluding {ticker} - volume below SMA on {date.date()}")
+                            else:
+                                filtered_volume_stocks.append((ticker, score))
+                        else:
+                            filtered_volume_stocks.append((ticker, score))
+                    if len(filtered_volume_stocks) < len(top_stocks):
+                        print(f"   [VOLUME FILTER] {len(top_stocks) - len(filtered_volume_stocks)} stocks filtered out, {len(filtered_volume_stocks)} remaining")
+                    top_stocks = filtered_volume_stocks
+                
                 # Buy stocks with available_for_stocks amount
                 if top_stocks and available_for_stocks > 0:
                     # Get position sizing config (default to equal weight)
@@ -2028,6 +2057,34 @@ class PortfolioEngine:
                         total_inv_vol_sq = sum(inv_vol_sq.values())
                         for ticker, score in top_stocks:
                             weights[ticker] = inv_vol_sq[ticker] / total_inv_vol_sq
+                    
+                    elif sizing_method == 'kelly_criterion':
+                        # Kelly: f* = (p*b - q)/b where p=win prob, b=avg win/avg loss, q=1-p
+                        # Estimate p and b from rolling returns
+                        kelly_fractions = {}
+                        for ticker, score in top_stocks:
+                            if ticker in self.data and len(self.data[ticker]) >= 60:
+                                returns = self.data[ticker]['Close'].pct_change().dropna()
+                                recent_rets = returns.iloc[-120:] if len(returns) > 120 else returns
+                                wins = recent_rets[recent_rets > 0]
+                                losses = recent_rets[recent_rets < 0]
+                                if len(wins) > 5 and len(losses) > 5:
+                                    p = len(wins) / len(recent_rets)
+                                    avg_win = wins.mean()
+                                    avg_loss = abs(losses.mean())
+                                    b = avg_win / avg_loss if avg_loss > 0 else 1.0
+                                    kelly = (p * b - (1 - p)) / b if b > 0 else 0
+                                    # Fractional Kelly: use 0.25 to be conservative
+                                    kelly = max(0, min(1, kelly * 0.25))
+                                else:
+                                    kelly = 1.0 / len(top_stocks)
+                                kelly_fractions[ticker] = kelly
+                            else:
+                                kelly_fractions[ticker] = 1.0 / len(top_stocks)
+                        
+                        total_kelly = sum(kelly_fractions.values())
+                        for ticker, score in top_stocks:
+                            weights[ticker] = kelly_fractions[ticker] / total_kelly if total_kelly > 0 else 1.0 / len(top_stocks)
                     
                     else:
                         # Default: equal weight
@@ -2478,6 +2535,125 @@ class PortfolioEngine:
             'Hedge Events': hedge_summary.get('event_count', 0),
         }
 
+    def get_bull_bear_performance(self, benchmark_ticker='^NSEI'):
+        """Split performance into Bull and Bear months based on Nifty monthly return.
+        
+        Returns:
+            dict with 'bull_return', 'bear_return', 'bull_months', 'bear_months',
+                   'bull_avg', 'bear_avg', 'total_months'
+        """
+        if self.portfolio_df.empty:
+            return {}
+        
+        try:
+            # Get monthly portfolio returns
+            monthly_rets = self.get_monthly_returns_data()
+            if monthly_rets.empty:
+                return {}
+            
+            # Download Nifty data for bull/bear classification
+            import yfinance as yf
+            nifty = yf.download(benchmark_ticker, start=self.start_date, end=self.end_date, progress=False)
+            if nifty.empty:
+                return {}
+            
+            nifty_close = nifty['Close'].squeeze() if isinstance(nifty['Close'], pd.DataFrame) else nifty['Close']
+            nifty_monthly = nifty_close.resample('ME').last()
+            nifty_monthly_rets = nifty_monthly.pct_change().dropna() * 100
+            
+            bull_returns = []
+            bear_returns = []
+            bull_months = 0
+            bear_months = 0
+            
+            for date, port_ret in monthly_rets.items():
+                if date in nifty_monthly_rets.index:
+                    nifty_ret = nifty_monthly_rets.loc[date]
+                    if nifty_ret > 0:
+                        bull_returns.append(port_ret)
+                        bull_months += 1
+                    else:
+                        bear_returns.append(port_ret)
+                        bear_months += 1
+            
+            result = {
+                'bull_months': bull_months,
+                'bear_months': bear_months,
+                'bull_avg': np.mean(bull_returns) if bull_returns else 0,
+                'bear_avg': np.mean(bear_returns) if bear_returns else 0,
+                'bull_total': np.sum(bull_returns) if bull_returns else 0,
+                'bear_total': np.sum(bear_returns) if bear_returns else 0,
+                'total_months': bull_months + bear_months
+            }
+            return result
+        except Exception as e:
+            print(f"Error in bull/bear analysis: {e}")
+            return {}
+    
+    def get_monthly_returns_data(self):
+        """Get monthly returns as a Series indexed by month-end dates."""
+        if self.portfolio_df.empty:
+            return pd.Series(dtype=float)
+        df = self.portfolio_df.copy()
+        monthly_values = df['Portfolio Value'].resample('ME').last()
+        monthly_rets = monthly_values.pct_change().dropna() * 100
+        return monthly_rets
+    
+    def get_attribution(self, benchmark_ticker='^NSEI'):
+        """Simple attribution: split excess return into timing vs selection.
+        
+        Timing: did regime filter help (outperformance in bear, underperformance in bull)?
+        Selection: stock picks vs benchmark return after accounting for timing.
+        
+        Returns:
+            dict with 'excess_return', 'timing_effect', 'selection_effect',
+                   'benchmark_return', 'portfolio_return'
+        """
+        result = {
+            'excess_return': 0,
+            'timing_effect': 0,
+            'selection_effect': 0,
+            'benchmark_return': 0,
+            'portfolio_return': 0
+        }
+        if self.portfolio_df.empty:
+            return result
+        
+        try:
+            import yfinance as yf
+            nifty = yf.download(benchmark_ticker, start=self.start_date, end=self.end_date, progress=False)
+            if nifty.empty:
+                return result
+            
+            nifty_close = nifty['Close'].squeeze() if isinstance(nifty['Close'], pd.DataFrame) else nifty['Close']
+            bench_ret = ((nifty_close.iloc[-1] / nifty_close.iloc[0]) - 1) * 100
+            
+            port_ret = ((self.portfolio_df['Portfolio Value'].iloc[-1] / self.initial_capital) - 1) * 100
+            excess = port_ret - bench_ret
+            
+            # Timing: if regime filter was used, compare actual vs theoretical
+            timing_effect = 0
+            if hasattr(self, 'equity_regime_analysis') and self.equity_regime_analysis:
+                theoretical = self.equity_regime_analysis.get('theoretical_curve', [])
+                if theoretical:
+                    theo_final = theoretical[-1][1] if isinstance(theoretical[-1], (list, tuple)) else theoretical[-1]
+                    theo_ret = ((theo_final / self.initial_capital) - 1) * 100
+                    timing_effect = port_ret - theo_ret
+            
+            selection_effect = excess - timing_effect
+            
+            result = {
+                'excess_return': round(excess, 2),
+                'timing_effect': round(timing_effect, 2),
+                'selection_effect': round(selection_effect, 2),
+                'benchmark_return': round(bench_ret, 2),
+                'portfolio_return': round(port_ret, 2)
+            }
+            return result
+        except Exception as e:
+            print(f"Error in attribution: {e}")
+            return result
+    
     def get_monthly_returns(self):
         """Calculate monthly returns table similar to the format shown."""
         if self.portfolio_df.empty:

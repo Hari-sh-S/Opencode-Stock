@@ -17,6 +17,7 @@ import io
 import time
 import json
 from pathlib import Path
+from sector_rotation_engine import SectorRotationEngine, SECTOR_INDICES
 
 # Page config - MUST be first Streamlit command
 st.set_page_config(
@@ -185,7 +186,7 @@ if kite_trader.is_kite_configured():
             st.error("❌ Zerodha login failed. Please try again.")
 
 # Main Tabs
-main_tabs = st.tabs(["Backtest", "Backtest Logs", "Execute Trades", "Data Download", "🔐 Dhan Auth"])
+main_tabs = st.tabs(["Backtest", "Backtest Logs", "Execute Trades", "Data Download", "🔐 Dhan Auth", "Sector Rotation", "📡 Live Dashboard"])
 
 # ==================== TAB 1: BACKTEST ====================
 with main_tabs[0]:
@@ -310,7 +311,7 @@ with main_tabs[0]:
         
         # ===== POSITION SIZING (in expander) =====
         with st.expander("📊 Position Sizing", expanded=False):
-            sizing_options = ["Equal Weight", "Inverse Volatility", "Inverse Downside Vol", "Inverse Max Drawdown", "Score-Weighted", "Risk Parity"]
+            sizing_options = ["Equal Weight", "Inverse Volatility", "Inverse Downside Vol", "Inverse Max Drawdown", "Score-Weighted", "Risk Parity", "Kelly Criterion"]
             default_sizing = loaded_config.get('position_sizing_method', 'Equal Weight')
             default_sizing_idx = sizing_options.index(default_sizing) if default_sizing in sizing_options else 0
             
@@ -341,6 +342,26 @@ with main_tabs[0]:
             'use_cap': use_max_position_cap,
             'max_pct': max_position_pct
         }
+        
+        # ===== VOLUME FILTER (in expander) =====
+        with st.expander("📈 Volume Filter", expanded=False):
+            use_volume_filter = st.checkbox(
+                "Enable Volume Filter",
+                value=loaded_config.get('volume_filter_enabled', False),
+                help="Exclude stocks whose latest volume is below their 20-day SMA"
+            )
+            volume_sma_period = st.number_input(
+                "Volume SMA Period",
+                5, 100, loaded_config.get('volume_sma_period', 20),
+                help="Number of days for volume moving average"
+            )
+        
+        filter_config = None
+        if use_volume_filter:
+            filter_config = {
+                'volume_filter': True,
+                'volume_sma_period': volume_sma_period
+            }
         
         # ===== REGIME FILTER (in expander) =====
         with st.expander("🛡️ Regime Filter", expanded=False):
@@ -991,7 +1012,8 @@ with main_tabs[0]:
                             reinvest_profits,
                             position_sizing_config,
                             historical_universe_config=historical_universe_config,
-                            risk_config=risk_config
+                            risk_config=risk_config,
+                            filter_config=filter_config
                         )
                         metrics = engine.get_metrics()
                         
@@ -1139,7 +1161,7 @@ with main_tabs[0]:
                         # Result tabs - add regime-specific tabs based on filter type
                         
                         # Build tab list dynamically
-                        tab_names = ["Performance Metrics", "Charts", "Monthly Breakup", "Monthly Report", "Trade History", "Monte Carlo Analysis"]
+                        tab_names = ["Performance Metrics", "Charts", "Monthly Breakup", "Monthly Report", "Trade History", "Monte Carlo Analysis", "Bull/Bear Analysis", "Attribution", "Decay Analysis"]
                         
                         # Check specific regime filter types
                         is_equity = regime_config and regime_config.get('type') == 'EQUITY'
@@ -1698,9 +1720,151 @@ with main_tabs[0]:
                             else:
                                 st.info("No trades available for Mone Carlo analysis. Run a backtest first.")
                         
+                        # Bull/Bear Analysis Tab
+                        with result_tabs[6]:
+                            st.markdown("### 🐂 Bull vs 🐻 Bear Market Performance")
+                            bb = engine.get_bull_bear_performance()
+                            if bb and bb.get('total_months', 0) > 0:
+                                col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+                                col_b1.metric("Bull Months", bb['bull_months'])
+                                col_b2.metric("Bear Months", bb['bear_months'])
+                                col_b3.metric("Avg Bull Return", f"{bb['bull_avg']:.2f}%")
+                                col_b4.metric("Avg Bear Return", f"{bb['bear_avg']:.2f}%")
+                                
+                                st.markdown("---")
+                                st.markdown(f"**Total Bull Return:** {bb['bull_total']:.2f}% | **Total Bear Return:** {bb['bear_total']:.2f}%")
+                                
+                                # Bull/Bear bar chart
+                                fig_bb = go.Figure()
+                                fig_bb.add_trace(go.Bar(
+                                    x=['Bull Months', 'Bear Months'],
+                                    y=[bb['bull_avg'], bb['bear_avg']],
+                                    marker_color=['#28a745', '#dc3545'],
+                                    text=[f"{bb['bull_avg']:.2f}%", f"{bb['bear_avg']:.2f}%"],
+                                    textposition='auto'
+                                ))
+                                fig_bb.update_layout(
+                                    title="Average Monthly Return: Bull vs Bear",
+                                    yaxis_title="Avg Return %",
+                                    template='plotly_dark',
+                                    height=400
+                                )
+                                st.plotly_chart(fig_bb, use_container_width=True)
+                            else:
+                                st.info("Not enough data for Bull/Bear analysis. Run a backtest first.")
+                        
+                        # Attribution Tab
+                        with result_tabs[7]:
+                            st.markdown("### 📊 Performance Attribution")
+                            attribution = engine.get_attribution()
+                            if attribution and attribution.get('benchmark_return') != 0:
+                                attr_col1, attr_col2, attr_col3 = st.columns(3)
+                                attr_col1.metric("Portfolio Return", f"{attribution['portfolio_return']:.2f}%")
+                                attr_col2.metric("Benchmark (Nifty 50)", f"{attribution['benchmark_return']:.2f}%")
+                                attr_col3.metric("Excess Return", f"{attribution['excess_return']:.2f}%")
+                                
+                                st.markdown("---")
+                                st.markdown("**Decomposition of Excess Return**")
+                                dec_col1, dec_col2 = st.columns(2)
+                                dec_col1.metric("Timing Effect", f"{attribution['timing_effect']:.2f}%",
+                                               help="Value added by regime filter timing decisions")
+                                dec_col2.metric("Selection Effect", f"{attribution['selection_effect']:.2f}%",
+                                               help="Value added by stock selection within market")
+                                
+                                # Attribution waterfall-like bar chart
+                                fig_attr = go.Figure()
+                                fig_attr.add_trace(go.Bar(
+                                    x=['Timing', 'Selection', 'Total Excess'],
+                                    y=[attribution['timing_effect'], attribution['selection_effect'], attribution['excess_return']],
+                                    marker_color=['#ffc107', '#17a2b8', '#28a745'],
+                                    text=[f"{attribution['timing_effect']:.2f}%", f"{attribution['selection_effect']:.2f}%", f"{attribution['excess_return']:.2f}%"],
+                                    textposition='auto'
+                                ))
+                                fig_attr.update_layout(
+                                    title="Excess Return Attribution",
+                                    yaxis_title="Return %",
+                                    template='plotly_dark',
+                                    height=400
+                                )
+                                st.plotly_chart(fig_attr, use_container_width=True)
+                                
+                                with st.expander("ℹ️ How Attribution Works"):
+                                    st.markdown("""
+                                    **Timing Effect** = Portfolio Return minus Theoretical Return (what you'd get without regime filter)
+                                    
+                                    **Selection Effect** = Excess Return minus Timing Effect
+                                    
+                                    *Positive Timing* means the regime filter added value (e.g., reduced exposure before downturns).
+                                    *Positive Selection* means stock picks outperformed the benchmark on average.
+                                    """)
+                            else:
+                                st.info("Not enough data for Attribution analysis. Run a backtest first.")
+                        
+                        # Decay Analysis Tab
+                        with result_tabs[8]:
+                            st.markdown("### 📉 Performance Decay Analysis")
+                            st.markdown("Shows rolling performance metrics to detect strategy decay over time.")
+                            
+                            if not engine.portfolio_df.empty:
+                                pf = engine.portfolio_df['Portfolio Value']
+                                rolling_window = st.selectbox("Rolling Window", [3, 6, 12, 24, 36, 60], index=2, key="decay_window", format_func=lambda x: f"{x} Months")
+                                
+                                # Resample to monthly
+                                monthly_val = pf.resample('ME').last()
+                                monthly_rets = monthly_val.pct_change().dropna()
+                                
+                                if len(monthly_rets) >= rolling_window:
+                                    rolling_ret = monthly_rets.rolling(rolling_window).apply(lambda x: (1 + x).prod() - 1) * 100
+                                    rolling_vol = monthly_rets.rolling(rolling_window).std() * np.sqrt(12) * 100
+                                    rolling_sharpe = rolling_ret / rolling_vol.replace(0, np.nan)
+                                    
+                                    decay_fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                                                              subplot_titles=(f'{rolling_window}M Rolling Return %', 
+                                                                              f'{rolling_window}M Rolling Volatility %',
+                                                                              f'{rolling_window}M Rolling Sharpe'))
+                                    
+                                    decay_fig.add_trace(go.Scatter(x=rolling_ret.index, y=rolling_ret.values,
+                                                                    name='Rolling Return', line=dict(color='#28a745')), row=1, col=1)
+                                    decay_fig.add_hline(y=0, line_dash='dash', line_color='gray', row=1, col=1)
+                                    
+                                    decay_fig.add_trace(go.Scatter(x=rolling_vol.index, y=rolling_vol.values,
+                                                                    name='Rolling Vol', line=dict(color='#dc3545')), row=2, col=2)
+                                    
+                                    decay_fig.add_trace(go.Scatter(x=rolling_sharpe.index, y=rolling_sharpe.values,
+                                                                    name='Rolling Sharpe', line=dict(color='#ffc107')), row=3, col=3)
+                                    decay_fig.add_hline(y=0, line_dash='dash', line_color='gray', row=3, col=3)
+                                    
+                                    decay_fig.update_layout(height=500, template='plotly_dark', showlegend=False)
+                                    st.plotly_chart(decay_fig, use_container_width=True)
+                                    
+                                    # Decay detection
+                                    st.markdown("---")
+                                    st.markdown("**🔍 Decay Detection**")
+                                    half = len(rolling_ret) // 2
+                                    if half >= rolling_window:
+                                        first_half_avg = rolling_ret.iloc[half-rolling_window:half].mean()
+                                        second_half_avg = rolling_ret.iloc[-rolling_window:].mean()
+                                        decay_pct = ((second_half_avg - first_half_avg) / abs(first_half_avg) * 100) if first_half_avg != 0 else 0
+                                        
+                                        dcol1, dcol2, dcol3 = st.columns(3)
+                                        dcol1.metric("Early Period Avg", f"{first_half_avg:.2f}%")
+                                        dcol2.metric("Recent Period Avg", f"{second_half_avg:.2f}%")
+                                        dcol3.metric("Decay", f"{decay_pct:.1f}%", delta=f"{decay_pct:.1f}%")
+                                        
+                                        if decay_pct < -20:
+                                            st.warning(f"⚠️ Significant performance decay detected ({decay_pct:.1f}%). Consider reviewing the strategy.")
+                                        elif decay_pct < -10:
+                                            st.info(f"📊 Moderate decay ({decay_pct:.1f}%). Monitor closely.")
+                                        else:
+                                            st.success(f"✅ No significant decay ({decay_pct:.1f}%).")
+                                else:
+                                    st.info(f"Need at least {rolling_window} months of data for decay analysis.")
+                            else:
+                                st.info("Run a backtest first to see decay analysis.")
+                        
                         # Equity Regime Testing Tab (only shown if EQUITY regime filter was used)
                         if is_equity and equity_analysis:
-                            equity_tab_idx = 6  # Base 6 tabs (0-5), this is index 6
+                            equity_tab_idx = 9  # Base 9 tabs (0-8), this is index 9
                             with result_tabs[equity_tab_idx]:
                                 st.markdown("### 📊 Equity Regime Testing")
                                 st.warning("⚠️ **DISCLAIMER**: This section is for testing purposes only. The theoretical curve shows what would have happened WITHOUT the EQUITY regime filter.")
@@ -2505,6 +2669,21 @@ with main_tabs[2]:
                         key="exec_name_input"
                     )
                 
+                # Notes and Tags (Trade Journal)
+                with st.expander("📝 Trade Journal Notes", expanded=False):
+                    exec_notes = st.text_area(
+                        "Notes",
+                        placeholder="Why this trade? Market context, rationale...",
+                        key="exec_notes",
+                        height=100
+                    )
+                    exec_tags = st.text_input(
+                        "Tags (comma-separated)",
+                        placeholder="e.g., momentum, earnings, breakout",
+                        key="exec_tags"
+                    )
+                    exec_tags_list = [t.strip() for t in exec_tags.split(",") if t.strip()] if exec_tags else []
+                
                 # Capital and Run Backtest
                 cap_col, btn_col = st.columns([1, 1])
                 
@@ -2711,7 +2890,9 @@ with main_tabs[2]:
                                         capital=exec_capital,
                                         trades=trades,
                                         portfolio_values=portfolio_values,
-                                        open_positions=open_positions
+                                        open_positions=open_positions,
+                                        notes=exec_notes,
+                                        tags=exec_tags_list
                                     )
                                     
                                     if success:
@@ -2761,7 +2942,9 @@ with main_tabs[2]:
                                         capital=exec_capital,
                                         trades=trades,
                                         portfolio_values=portfolio_values,
-                                        open_positions=open_positions
+                                        open_positions=open_positions,
+                                        notes=exec_notes,
+                                        tags=exec_tags_list
                                     )
                                     
                                     if result['success']:
@@ -2815,6 +2998,16 @@ with main_tabs[2]:
                         info_cols[3].metric("Trades", len(execution_data.get('trades', [])))
                         
                         st.caption(f"Created: {execution_data.get('created_at', '')[:19]} | Last Updated: {execution_data.get('last_updated', '')[:19]}")
+                        
+                        # Notes and Tags display
+                        exec_notes = execution_data.get('notes', '')
+                        exec_tags = execution_data.get('tags', [])
+                        if exec_notes or exec_tags:
+                            with st.expander("📝 Trade Journal", expanded=True):
+                                if exec_tags:
+                                    st.markdown("**Tags:** " + ", ".join(f"`{t}`" for t in exec_tags))
+                                if exec_notes:
+                                    st.markdown(f"**Notes:** {exec_notes}")
                         
                         # Trade log
                         trades = execution_data.get('trades', [])
@@ -3389,3 +3582,113 @@ DHAN_ACCESS_TOKEN = ""
                 st.error(f"❌ {ve}")
             except Exception as e:
                 st.error(f"❌ Connection failed: {e}")
+
+with main_tabs[5]:
+    st.subheader("🏭 Sector Rotation Backtest")
+    st.markdown("Score and rotate across Nifty sector indices based on momentum/volatility metrics.")
+    
+    sr_col1, sr_col2 = st.columns([2, 1])
+    
+    with sr_col1:
+        sr_start = st.date_input("Start Date", value=pd.Timestamp('2023-01-01'), key="sr_start")
+        sr_end = st.date_input("End Date", value=pd.Timestamp.today(), key="sr_end")
+    
+    with sr_col2:
+        sr_formula = st.text_input(
+            "Scoring Formula",
+            value="6 Month Performance + 3 Month Performance",
+            key="sr_formula",
+            help="Same formula syntax as the main backtest"
+        )
+        sr_num_sectors = st.number_input("Number of Sectors", 1, 10, 3, key="sr_num_sectors")
+        sr_rebal_freq = st.selectbox("Rebalance Frequency", ["Monthly", "Weekly", "Quarterly"], key="sr_rebal_freq")
+        sr_sizing = st.selectbox("Position Sizing", ["Equal Weight", "Score-Weighted"], key="sr_sizing")
+    
+    if st.button("🚀 Run Sector Rotation", key="run_sector_rotation"):
+        with st.spinner("Downloading sector index data..."):
+            engine = SectorRotationEngine(
+                start_date=sr_start.strftime('%Y-%m-%d'),
+                end_date=sr_end.strftime('%Y-%m-%d'),
+                initial_capital=10_000_000
+            )
+            engine.download_sector_data()
+            
+            if not engine.data:
+                st.error("Failed to download sector data. Check your internet connection.")
+            else:
+                with st.spinner("Running sector rotation backtest..."):
+                    engine.run_backtest(
+                        scoring_formula=sr_formula,
+                        num_sectors=sr_num_sectors,
+                        rebal_freq=sr_rebal_freq,
+                        position_sizing=sr_sizing.lower().replace('-', '_')
+                    )
+                    
+                    metrics = engine.get_metrics()
+                    
+                    if metrics:
+                        st.success("✅ Sector rotation backtest complete!")
+                        
+                        # KPI row
+                        mk1, mk2, mk3, mk4 = st.columns(4)
+                        mk1.metric("Final Value", f"₹{metrics['Final Value']:,.0f}")
+                        mk1.metric("Total Return", f"₹{metrics['Total Return']:,.0f}")
+                        mk2.metric("CAGR %", f"{metrics['CAGR %']:.2f}%")
+                        mk2.metric("Max DD %", f"{metrics['Max Drawdown %']:.2f}%")
+                        mk3.metric("Sharpe Ratio", f"{metrics['Sharpe Ratio']:.2f}")
+                        mk3.metric("Win Rate %", f"{metrics['Win Rate %']:.2f}%")
+                        mk4.metric("Total Trades", metrics['Total Trades'])
+                        mk4.metric("Return %", f"{metrics['Return %']:.2f}%")
+                        
+                        # Equity curve
+                        if not engine.portfolio_df.empty:
+                            fig_sr = go.Figure()
+                            fig_sr.add_trace(go.Scatter(
+                                x=engine.portfolio_df.index,
+                                y=engine.portfolio_df['Portfolio Value'],
+                                name='Sector Rotation',
+                                line=dict(color='#17a2b8', width=2)
+                            ))
+                            fig_sr.update_layout(
+                                title="Sector Rotation Equity Curve",
+                                xaxis_title="Date",
+                                yaxis_title="Portfolio Value (₹)",
+                                template='plotly_dark',
+                                height=400
+                            )
+                            st.plotly_chart(fig_sr, use_container_width=True)
+                        
+                        # Monthly returns
+                        monthly_df = engine.get_monthly_returns()
+                        if not monthly_df.empty:
+                            with st.expander("📅 Monthly Returns", expanded=False):
+                                st.dataframe(monthly_df.style.format("{:.2f}%"), use_container_width=True)
+                        
+                        # Trade history
+                        if engine.trades:
+                            trades_df = pd.DataFrame(engine.trades)
+                            with st.expander("📋 Trade History", expanded=False):
+                                st.dataframe(trades_df, use_container_width=True)
+        
+        # Sector performance summary
+        with st.expander("📊 Sector Performance Summary"):
+            if engine.data:
+                perf_data = []
+                for sector, df in engine.data.items():
+                    if len(df) > 1:
+                        ret = ((df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1) * 100
+                        perf_data.append({'Sector': sector, 'Return %': f"{ret:.2f}%"})
+                if perf_data:
+                    st.dataframe(pd.DataFrame(perf_data), use_container_width=True)
+
+with main_tabs[6]:
+    st.subheader("📡 Live Trading Dashboard")
+    
+    broker_choice = st.selectbox(
+        "Select Broker",
+        ["Zerodha", "Dhan"],
+        key="live_broker_select"
+    )
+    
+    from live_portfolio import render_live_dashboard
+    render_live_dashboard(broker_choice)
