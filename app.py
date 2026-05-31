@@ -1161,7 +1161,7 @@ with main_tabs[0]:
                         # Result tabs - add regime-specific tabs based on filter type
                         
                         # Build tab list dynamically
-                        tab_names = ["Performance Metrics", "Charts", "Monthly Breakup", "Monthly Report", "Trade History", "Monte Carlo Analysis", "Bull/Bear Analysis", "Attribution", "Decay Analysis"]
+                        tab_names = ["Performance Metrics", "Charts", "Monthly Breakup", "Monthly Report", "Trade History", "Monte Carlo Analysis"]
                         
                         # Check specific regime filter types
                         is_equity = regime_config and regime_config.get('type') == 'EQUITY'
@@ -1681,161 +1681,11 @@ with main_tabs[0]:
                             else:
                                 st.info("No trades available for Mone Carlo analysis. Run a backtest first.")
                         
-                        # Bull/Bear Analysis Tab
-                        with result_tabs[6]:
-                            st.markdown("### 🐂 Bull vs 🐻 Bear Market Performance")
-                            bb = engine.get_bull_bear_performance()
-                            if bb and bb.get('total_months', 0) > 0:
-                                col_b1, col_b2, col_b3, col_b4 = st.columns(4)
-                                col_b1.metric("Bull Months", bb['bull_months'])
-                                col_b2.metric("Bear Months", bb['bear_months'])
-                                col_b3.metric("Avg Bull Return", f"{bb['bull_avg']:.2f}%")
-                                col_b4.metric("Avg Bear Return", f"{bb['bear_avg']:.2f}%")
-                                
-                                st.markdown("---")
-                                st.markdown(f"**Total Bull Return:** {bb['bull_total']:.2f}% | **Total Bear Return:** {bb['bear_total']:.2f}%")
-                                
-                                # Bull/Bear bar chart
-                                fig_bb = go.Figure()
-                                fig_bb.add_trace(go.Bar(
-                                    x=['Bull Months', 'Bear Months'],
-                                    y=[bb['bull_avg'], bb['bear_avg']],
-                                    marker_color=['#28a745', '#dc3545'],
-                                    text=[f"{bb['bull_avg']:.2f}%", f"{bb['bear_avg']:.2f}%"],
-                                    textposition='auto'
-                                ))
-                                fig_bb.update_layout(
-                                    title="Average Monthly Return: Bull vs Bear",
-                                    yaxis_title="Avg Return %",
-                                    template='plotly_dark',
-                                    height=400
-                                )
-                                st.plotly_chart(fig_bb, use_container_width=True)
-                            else:
-                                st.info("Not enough data for Bull/Bear analysis. Run a backtest first.")
                         
-                        # Attribution Tab
-                        with result_tabs[7]:
-                            st.markdown("### 📊 Performance Attribution")
-                            attribution = engine.get_attribution()
-                            if attribution and attribution.get('benchmark_return') != 0:
-                                attr_col1, attr_col2, attr_col3 = st.columns(3)
-                                attr_col1.metric("Portfolio Return", f"{attribution['portfolio_return']:.2f}%")
-                                attr_col2.metric("Benchmark (Nifty 50)", f"{attribution['benchmark_return']:.2f}%")
-                                attr_col3.metric("Excess Return", f"{attribution['excess_return']:.2f}%")
-                                
-                                st.markdown("---")
-                                st.markdown("**Decomposition of Excess Return**")
-                                dec_col1, dec_col2 = st.columns(2)
-                                dec_col1.metric("Timing Effect", f"{attribution['timing_effect']:.2f}%",
-                                               help="Value added by regime filter timing decisions")
-                                dec_col2.metric("Selection Effect", f"{attribution['selection_effect']:.2f}%",
-                                               help="Value added by stock selection within market")
-                                
-                                # Attribution waterfall-like bar chart
-                                fig_attr = go.Figure()
-                                fig_attr.add_trace(go.Bar(
-                                    x=['Timing', 'Selection', 'Total Excess'],
-                                    y=[attribution['timing_effect'], attribution['selection_effect'], attribution['excess_return']],
-                                    marker_color=['#ffc107', '#17a2b8', '#28a745'],
-                                    text=[f"{attribution['timing_effect']:.2f}%", f"{attribution['selection_effect']:.2f}%", f"{attribution['excess_return']:.2f}%"],
-                                    textposition='auto'
-                                ))
-                                fig_attr.update_layout(
-                                    title="Excess Return Attribution",
-                                    yaxis_title="Return %",
-                                    template='plotly_dark',
-                                    height=400
-                                )
-                                st.plotly_chart(fig_attr, use_container_width=True)
-                                
-                                with st.expander("ℹ️ How Attribution Works"):
-                                    st.markdown("""
-                                    **Timing Effect** = Portfolio Return minus Theoretical Return (what you'd get without regime filter)
-                                    
-                                    **Selection Effect** = Excess Return minus Timing Effect
-                                    
-                                    *Positive Timing* means the regime filter added value (e.g., reduced exposure before downturns).
-                                    *Positive Selection* means stock picks outperformed the benchmark on average.
-                                    """)
-                            else:
-                                st.info("Not enough data for Attribution analysis. Run a backtest first.")
-                        
-                        # Decay Analysis Tab
-                        with result_tabs[8]:
-                            st.markdown("### 📉 Performance Decay Analysis")
-                            st.markdown("Shows rolling performance metrics to detect strategy decay over time.")
-                            
-                            if not engine.portfolio_df.empty:
-                                pf = engine.portfolio_df['Portfolio Value']
-                                decay_window_opts = [3, 6, 12, 24, 36, 60]
-                                if 'decay_window' not in st.session_state:
-                                    st.session_state.decay_window = 12
-                                decay_win_cols = st.columns(len(decay_window_opts))
-                                for i, w in enumerate(decay_window_opts):
-                                    with decay_win_cols[i]:
-                                        btn_type = "primary" if st.session_state.decay_window == w else "secondary"
-                                        if st.button(f"{w}M", key=f"decay_btn_{w}", use_container_width=True, type=btn_type):
-                                            st.session_state.decay_window = w
-                                            st.rerun()
-                                rolling_window = st.session_state.decay_window
-                                
-                                # Resample to monthly
-                                monthly_val = pf.resample('ME').last()
-                                monthly_rets = monthly_val.pct_change().dropna()
-                                
-                                if len(monthly_rets) >= rolling_window:
-                                    rolling_ret = monthly_rets.rolling(rolling_window).apply(lambda x: (1 + x).prod() - 1) * 100
-                                    rolling_vol = monthly_rets.rolling(rolling_window).std() * np.sqrt(12) * 100
-                                    rolling_sharpe = rolling_ret / rolling_vol.replace(0, np.nan)
-                                    
-                                    decay_fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
-                                                              subplot_titles=(f'{rolling_window}M Rolling Return %', 
-                                                                              f'{rolling_window}M Rolling Volatility %',
-                                                                              f'{rolling_window}M Rolling Sharpe'))
-                                    
-                                    decay_fig.add_trace(go.Scatter(x=rolling_ret.index, y=rolling_ret.values,
-                                                                    name='Rolling Return', line=dict(color='#28a745')), row=1, col=1)
-                                    decay_fig.add_hline(y=0, line_dash='dash', line_color='gray', row=1, col=1)
-                                    
-                                    decay_fig.add_trace(go.Scatter(x=rolling_vol.index, y=rolling_vol.values,
-                                                                    name='Rolling Vol', line=dict(color='#dc3545')), row=2, col=1)
-                                    
-                                    decay_fig.add_trace(go.Scatter(x=rolling_sharpe.index, y=rolling_sharpe.values,
-                                                                    name='Rolling Sharpe', line=dict(color='#ffc107')), row=3, col=1)
-                                    decay_fig.add_hline(y=0, line_dash='dash', line_color='gray', row=3, col=1)
-                                    
-                                    decay_fig.update_layout(height=500, template='plotly_dark', showlegend=False)
-                                    st.plotly_chart(decay_fig, use_container_width=True)
-                                    
-                                    # Decay detection
-                                    st.markdown("---")
-                                    st.markdown("**🔍 Decay Detection**")
-                                    half = len(rolling_ret) // 2
-                                    if half >= rolling_window:
-                                        first_half_avg = rolling_ret.iloc[half-rolling_window:half].mean()
-                                        second_half_avg = rolling_ret.iloc[-rolling_window:].mean()
-                                        decay_pct = ((second_half_avg - first_half_avg) / abs(first_half_avg) * 100) if first_half_avg != 0 else 0
-                                        
-                                        dcol1, dcol2, dcol3 = st.columns(3)
-                                        dcol1.metric("Early Period Avg", f"{first_half_avg:.2f}%")
-                                        dcol2.metric("Recent Period Avg", f"{second_half_avg:.2f}%")
-                                        dcol3.metric("Decay", f"{decay_pct:.1f}%", delta=f"{decay_pct:.1f}%")
-                                        
-                                        if decay_pct < -20:
-                                            st.warning(f"⚠️ Significant performance decay detected ({decay_pct:.1f}%). Consider reviewing the strategy.")
-                                        elif decay_pct < -10:
-                                            st.info(f"📊 Moderate decay ({decay_pct:.1f}%). Monitor closely.")
-                                        else:
-                                            st.success(f"✅ No significant decay ({decay_pct:.1f}%).")
-                                else:
-                                    st.info(f"Need at least {rolling_window} months of data for decay analysis.")
-                            else:
-                                st.info("Run a backtest first to see decay analysis.")
                         
                         # Equity Regime Testing Tab (only shown if EQUITY regime filter was used)
                         if is_equity and equity_analysis:
-                            equity_tab_idx = 9  # Base 9 tabs (0-8), this is index 9
+                            equity_tab_idx = 6  # 6 base tabs (0-5), this is index 6
                             with result_tabs[equity_tab_idx]:
                                 st.markdown("### 📊 Equity Regime Testing")
                                 st.warning("⚠️ **DISCLAIMER**: This section is for testing purposes only. The theoretical curve shows what would have happened WITHOUT the EQUITY regime filter.")
@@ -2382,6 +2232,27 @@ with main_tabs[0]:
                         st.warning("No trades generated")
                 else:
                     st.error("Data fetch failed")
+    
+    # Persist Open Positions across reruns from session_state
+    if not run_btn and st.session_state.get('current_backtest_active') and 'current_backtest' in st.session_state:
+        stored = st.session_state['current_backtest']
+        stored_engine = stored['engine']
+        if hasattr(stored_engine, 'get_open_positions'):
+            open_positions = stored_engine.get_open_positions()
+            if open_positions:
+                st.markdown("---")
+                st.subheader("📈 Open Positions (Current Holdings)")
+                open_df = pd.DataFrame(open_positions)
+                
+                def color_unrealized(val):
+                    if isinstance(val, (int, float)):
+                        if val > 0: return 'color: #28a745; font-weight: bold'
+                        elif val < 0: return 'color: #dc3545; font-weight: bold'
+                    return ''
+                
+                styled_open = open_df.style.map(color_unrealized, subset=['Unrealized ROI %'])
+                st.dataframe(styled_open, use_container_width=True)
+                st.caption("Positions still held at backtest end. Go to **Execute Trades** tab to place orders.")
     
     # STANDALONE BENCHMARK COMPARISON - Persists across reruns using session_state
     if st.session_state.get('current_backtest_active') and 'current_backtest' in st.session_state:
