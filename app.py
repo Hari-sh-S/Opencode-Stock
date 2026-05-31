@@ -343,25 +343,126 @@ with main_tabs[0]:
             'max_pct': max_position_pct
         }
         
-        # ===== VOLUME FILTER (in expander) =====
-        with st.expander("📈 Volume Filter", expanded=False):
-            use_volume_filter = st.checkbox(
-                "Enable Volume Filter",
-                value=loaded_config.get('volume_filter_enabled', False),
-                help="Exclude stocks whose latest volume is below their 20-day SMA"
-            )
-            volume_sma_period = st.number_input(
-                "Volume SMA Period",
-                5, 100, loaded_config.get('volume_sma_period', 20),
-                help="Number of days for volume moving average"
-            )
+        # ===== OTHER FILTERS (in expander) =====
+        filter_config = {}
+        with st.expander("📊 Other Filters", expanded=False):
+            # a) Volatility-based
+            st.markdown("**a) Volatility-based Filters**")
+            vcol1, vcol2 = st.columns(2)
+            with vcol1:
+                fc_use = st.checkbox("Max Ann. Vol %", key="fc_max_vol",
+                    value=loaded_config.get('filter_config', {}).get('max_daily_vol', {}).get('enabled', False),
+                    help="Exclude stocks above this annualized volatility threshold")
+                fc_thresh = st.number_input("Max Vol %", 10, 150, 
+                    loaded_config.get('filter_config', {}).get('max_daily_vol', {}).get('threshold', 60), key="fc_max_vol_thresh")
+            with vcol2:
+                fc_use2 = st.checkbox("Min Ann. Vol %", key="fc_min_vol",
+                    value=loaded_config.get('filter_config', {}).get('min_daily_vol', {}).get('enabled', False),
+                    help="Exclude stocks below this annualized volatility (no momentum)")
+                fc_thresh2 = st.number_input("Min Vol %", 5, 60,
+                    loaded_config.get('filter_config', {}).get('min_daily_vol', {}).get('threshold', 15), key="fc_min_vol_thresh")
+            
+            st.markdown("---")
+            # b) Liquidity
+            st.markdown("**b) Liquidity Filters**")
+            lcol1, lcol2 = st.columns(2)
+            with lcol1:
+                fc_use3 = st.checkbox("Min Price (₹)", key="fc_min_price",
+                    value=loaded_config.get('filter_config', {}).get('min_price', {}).get('enabled', False))
+                fc_thresh3 = st.number_input("Min Price", 5, 5000,
+                    loaded_config.get('filter_config', {}).get('min_price', {}).get('threshold', 20), key="fc_min_price_thresh")
+            with lcol2:
+                fc_use4 = st.checkbox("Min Daily ₹ Vol (Cr)", key="fc_min_vol_cr",
+                    value=loaded_config.get('filter_config', {}).get('min_volume_cr', {}).get('enabled', False),
+                    help="Exclude stocks below this average daily traded value")
+                fc_thresh4 = st.number_input("Min ₹ Cr", 0.5, 500.0,
+                    loaded_config.get('filter_config', {}).get('min_volume_cr', {}).get('threshold', 5.0), key="fc_min_vol_cr_thresh")
+            
+            st.markdown("---")
+            # c) Momentum quality
+            st.markdown("**c) Momentum Quality Filters**")
+            mcol1, mcol2, mcol3 = st.columns(3)
+            with mcol1:
+                fc_use5 = st.checkbox("Consecutive Up Days", key="fc_cons_up",
+                    value=loaded_config.get('filter_config', {}).get('consecutive_up_days', {}).get('enabled', False))
+                fc_min_up = st.number_input("Min Up Days", 2, 20,
+                    loaded_config.get('filter_config', {}).get('consecutive_up_days', {}).get('min_days', 6), key="fc_cons_up_min")
+                fc_up_look = st.number_input("Lookback Days", 5, 50,
+                    loaded_config.get('filter_config', {}).get('consecutive_up_days', {}).get('lookback', 10), key="fc_cons_up_look")
+            with mcol2:
+                fc_use6 = st.checkbox("Min ADX (>25)", key="fc_adx",
+                    value=loaded_config.get('filter_config', {}).get('min_adx', {}).get('enabled', False),
+                    help="Only stocks with ADX above threshold (trending)")
+                fc_adx_thresh = st.number_input("ADX Threshold", 10, 60,
+                    loaded_config.get('filter_config', {}).get('min_adx', {}).get('threshold', 25), key="fc_adx_thresh")
+            with mcol3:
+                fc_use7 = st.checkbox("RSI Range", key="fc_rsi",
+                    value=loaded_config.get('filter_config', {}).get('rsi_range', {}).get('enabled', False))
+                fc_rsi_min = st.number_input("RSI Min", 10, 90,
+                    loaded_config.get('filter_config', {}).get('rsi_range', {}).get('min', 40), key="fc_rsi_min")
+                fc_rsi_max = st.number_input("RSI Max", 20, 99,
+                    loaded_config.get('filter_config', {}).get('rsi_range', {}).get('max', 80), key="fc_rsi_max")
+            
+            mcol4, mcol5 = st.columns(2)
+            with mcol4:
+                fc_use8 = st.checkbox("MACD Histogram Positive", key="fc_macd",
+                    value=loaded_config.get('filter_config', {}).get('macd_positive', {}).get('enabled', False),
+                    help="Only stocks with positive MACD histogram")
+            
+            st.markdown("---")
+            # e) Risk filters
+            st.markdown("**e) Risk Filters**")
+            rcol1, _ = st.columns(2)
+            with rcol1:
+                fc_use9 = st.checkbox("Min Beta (> X)", key="fc_beta",
+                    value=loaded_config.get('filter_config', {}).get('min_beta', {}).get('enabled', False),
+                    help="Only stocks with beta above threshold vs NIFTY (may slow down)")
+                fc_beta_thresh = st.number_input("Beta Threshold", 0.3, 3.0,
+                    loaded_config.get('filter_config', {}).get('min_beta', {}).get('threshold', 0.8), key="fc_beta_thresh", step=0.1)
+            
+            st.markdown("---")
+            # f) Price structure
+            st.markdown("**f) Price Structure Filters**")
+            pcol1, pcol2, pcol3 = st.columns(3)
+            with pcol1:
+                fc_use10 = st.checkbox("Price > SMA(50)", key="fc_sma50",
+                    value=loaded_config.get('filter_config', {}).get('price_above_sma50', {}).get('enabled', False))
+            with pcol2:
+                fc_use11 = st.checkbox("Price > SMA(200)", key="fc_sma200",
+                    value=loaded_config.get('filter_config', {}).get('price_above_sma200', {}).get('enabled', False))
+            with pcol3:
+                fc_use12 = st.checkbox("Stage 2 (Price > SMA50 > SMA200)", key="fc_stage2",
+                    value=loaded_config.get('filter_config', {}).get('stage2', {}).get('enabled', False),
+                    help="Golden cross condition with price above both MAs")
         
-        filter_config = None
-        if use_volume_filter:
-            filter_config = {
-                'volume_filter': True,
-                'volume_sma_period': volume_sma_period
-            }
+        if any([fc_use, fc_use2, fc_use3, fc_use4, fc_use5, fc_use6, fc_use7, fc_use8, fc_use9, fc_use10, fc_use11, fc_use12]):
+            filter_config = {}
+            if fc_use:
+                filter_config['max_daily_vol'] = {'enabled': True, 'threshold': fc_thresh}
+            if fc_use2:
+                filter_config['min_daily_vol'] = {'enabled': True, 'threshold': fc_thresh2}
+            if fc_use3:
+                filter_config['min_price'] = {'enabled': True, 'threshold': fc_thresh3}
+            if fc_use4:
+                filter_config['min_volume_cr'] = {'enabled': True, 'threshold': fc_thresh4}
+            if fc_use5:
+                filter_config['consecutive_up_days'] = {'enabled': True, 'min_days': fc_min_up, 'lookback': fc_up_look}
+            if fc_use6:
+                filter_config['min_adx'] = {'enabled': True, 'threshold': fc_adx_thresh}
+            if fc_use7:
+                filter_config['rsi_range'] = {'enabled': True, 'min': fc_rsi_min, 'max': fc_rsi_max}
+            if fc_use8:
+                filter_config['macd_positive'] = {'enabled': True}
+            if fc_use9:
+                filter_config['min_beta'] = {'enabled': True, 'threshold': fc_beta_thresh}
+            if fc_use10:
+                filter_config['price_above_sma50'] = {'enabled': True}
+            if fc_use11:
+                filter_config['price_above_sma200'] = {'enabled': True}
+            if fc_use12:
+                filter_config['stage2'] = {'enabled': True}
+        else:
+            filter_config = None
         
         # ===== REGIME FILTER (in expander) =====
         with st.expander("🛡️ Regime Filter", expanded=False):

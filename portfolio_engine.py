@@ -448,16 +448,23 @@ class PortfolioEngine:
         return len(self.data) > 0
     
     def calculate_indicators_for_formula(self, formula, regime_config=None, filter_config=None):
-        """Calculate only the indicators needed for the formula and regime filter."""
+        """Calculate indicators needed for formula, regime filter, and stock filters."""
         # Determine which indicator types are needed
         needs_momentum = any(x in formula.upper() for x in ['PERFORMANCE', 'SHARPE', 'SORTINO', 'CALMAR', 'VOLATILITY', 'DRAWDOWN'])
         needs_regime = regime_config is not None and regime_config.get('type') != 'EQUITY'
         needs_volume = filter_config is not None and filter_config.get('volume_filter', False)
+        needs_sma = False
+        needs_adx = False
+        if filter_config:
+            needs_sma = (filter_config.get('price_above_sma50', {}).get('enabled') or
+                         filter_config.get('price_above_sma200', {}).get('enabled') or
+                         filter_config.get('stage2', {}).get('enabled'))
+            needs_adx = filter_config.get('min_adx', {}).get('enabled', False)
         
-        if not needs_momentum and not needs_regime:
+        if not needs_momentum and not needs_regime and not needs_sma and not needs_adx:
             return  # No indicators needed
         
-        # Extract required periods from formula (e.g., "15 Month Performance" -> (15, 'Performance'))
+        # Extract required periods from formula
         required_periods = None
         if needs_momentum:
             from scoring import ScoreParser
@@ -465,7 +472,7 @@ class PortfolioEngine:
             required_periods = parser.extract_required_periods(formula)
             print(f"Calculating indicators (momentum={needs_momentum}, regime={needs_regime}, periods={required_periods})...")
         else:
-            print(f"Calculating indicators (momentum={needs_momentum}, regime={needs_regime})...")
+            print(f"Calculating indicators (momentum={needs_momentum}, regime={needs_regime}, sma={needs_sma}, adx={needs_adx})...")
         
         for ticker in self.data:
             try:
@@ -477,11 +484,9 @@ class PortfolioEngine:
                 elif len(df.columns) > 0 and isinstance(df.columns[0], tuple):
                     df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
                 
-                # Only calculate if not already calculated
                 if needs_momentum and '6 Month Performance' not in df.columns:
                     df = IndicatorLibrary.add_momentum_volatility_metrics(df, required_periods)
                 elif needs_momentum and required_periods:
-                    # Check if any required periods are missing and add them
                     df = IndicatorLibrary.add_momentum_volatility_metrics(df, required_periods)
                     
                 if needs_regime and 'EMA_200' not in df.columns:
@@ -491,7 +496,16 @@ class PortfolioEngine:
                     volume_sma_period = filter_config.get('volume_sma_period', 20)
                     df = IndicatorLibrary.add_volume_indicators(df, volume_sma_period=volume_sma_period)
                 
-                # Flatten again after indicators (some libraries create MultiIndex)
+                if needs_adx and 'ADX_14' not in df.columns:
+                    df = IndicatorLibrary.add_adx(df)
+                
+                if needs_sma:
+                    if 'SMA_50' not in df.columns:
+                        df = IndicatorLibrary.add_sma(df, 50)
+                    if 'SMA_200' not in df.columns:
+                        df = IndicatorLibrary.add_sma(df, 200)
+                
+                # Flatten again after indicators
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
                 
@@ -640,6 +654,150 @@ class PortfolioEngine:
                 return True
         
         return False
+
+    def _apply_other_filters(self, top_stocks, filter_config, date):
+        """Apply all enabled stock filters (volatility, liquidity, momentum quality, price structure)."""
+        filtered = []
+        nifty_data = None
+        for ticker, score in top_stocks:
+            if ticker not in self.data or date not in self.data[ticker].index:
+                filtered.append((ticker, score))
+                continue
+            row = self.data[ticker].loc[date]
+            close = float(row['Close']) if hasattr(row['Close'], 'iloc') else float(row['Close']) if not isinstance(row['Close'], float) else row['Close']
+            exclude = False
+            reason = ""
+
+            # a) Volatility-based filters
+            vol_cfg = filter_config.get('max_daily_vol', {})
+            if vol_cfg.get('enabled') and not exclude:
+                daily_ret = self.data[ticker]['Close'].pct_change().iloc[-21:]
+                ann_vol = daily_ret.std() * (252 ** 0.5) if len(daily_ret) > 5 else 0
+                threshold = vol_cfg.get('threshold', 50) / 100.0
+                if ann_vol > threshold:
+                    exclude = True
+                    reason = f"max vol {ann_vol*100:.1f}% > {vol_cfg['threshold']}%"
+
+            vol_cfg = filter_config.get('min_daily_vol', {})
+            if vol_cfg.get('enabled') and not exclude:
+                daily_ret = self.data[ticker]['Close'].pct_change().iloc[-21:]
+                ann_vol = daily_ret.std() * (252 ** 0.5) if len(daily_ret) > 5 else 0
+                threshold = vol_cfg.get('threshold', 15) / 100.0
+                if ann_vol < threshold:
+                    exclude = True
+                    reason = f"min vol {ann_vol*100:.1f}% < {vol_cfg['threshold']}%"
+
+            # b) Liquidity filters
+            liq_cfg = filter_config.get('min_price', {})
+            if liq_cfg.get('enabled') and not exclude:
+                min_px = liq_cfg.get('threshold', 20)
+                if close < min_px:
+                    exclude = True
+                    reason = f"price {close:.0f} < ₹{min_px}"
+
+            liq_cfg = filter_config.get('min_volume_cr', {})
+            if liq_cfg.get('enabled') and not exclude:
+                volume = float(row['Volume']) if hasattr(row['Volume'], 'iloc') else float(row['Volume'])
+                min_cr = liq_cfg.get('threshold', 5.0)
+                if close * volume / 1e7 < min_cr:
+                    exclude = True
+                    reason = f"₹ vol {close*volume/1e7:.1f}Cr < {min_cr}Cr"
+
+            # c) Momentum quality filters
+            mq_cfg = filter_config.get('consecutive_up_days', {})
+            if mq_cfg.get('enabled') and not exclude:
+                lookback = mq_cfg.get('lookback', 10)
+                min_days = mq_cfg.get('min_days', 6)
+                returns = self.data[ticker]['Close'].pct_change().iloc[-(lookback+1):].iloc[1:]
+                up_days = (returns > 0).sum()
+                if up_days < min_days:
+                    exclude = True
+                    reason = f"only {up_days}/{lookback} up days (need {min_days})"
+
+            mq_cfg = filter_config.get('min_adx', {})
+            if mq_cfg.get('enabled') and not exclude:
+                adx_col = f"ADX_{mq_cfg.get('period', 14)}"
+                adx_val = float(row.get(adx_col, 0))
+                threshold = mq_cfg.get('threshold', 25)
+                if adx_val < threshold:
+                    exclude = True
+                    reason = f"ADX {adx_val:.0f} < {threshold}"
+
+            mq_cfg = filter_config.get('rsi_range', {})
+            if mq_cfg.get('enabled') and not exclude:
+                rsi_col = f"RSI_{mq_cfg.get('period', 14)}"
+                rsi_val = float(row.get(rsi_col, 50))
+                rsi_min = mq_cfg.get('min', 40)
+                rsi_max = mq_cfg.get('max', 80)
+                if rsi_val < rsi_min or rsi_val > rsi_max:
+                    exclude = True
+                    reason = f"RSI {rsi_val:.0f} outside [{rsi_min},{rsi_max}]"
+
+            mq_cfg = filter_config.get('macd_positive', {})
+            if mq_cfg.get('enabled') and not exclude:
+                macd_hist = float(row.get('MACD_Histogram', row.get('MACD', 0)))
+                if macd_hist < 0:
+                    exclude = True
+                    reason = "MACD histogram negative"
+
+            # e) Risk filters
+            risk_cfg = filter_config.get('min_beta', {})
+            if risk_cfg.get('enabled') and not exclude:
+                if nifty_data is None:
+                    try:
+                        nd = yf.download("^NSEI", start=pd.Timestamp(date) - pd.Timedelta(days=400), end=pd.Timestamp(date), progress=False, auto_adjust=True)
+                        nifty_data = nd['Close'].squeeze() if not nd.empty else None
+                    except Exception:
+                        nifty_data = None
+                if nifty_data is not None:
+                    stock_rets = self.data[ticker]['Close'].pct_change().iloc[-252:]
+                    nifty_rets = nifty_data.pct_change().iloc[-252:] if isinstance(nifty_data, pd.Series) else None
+                    if nifty_rets is not None and len(stock_rets) > 20 and len(nifty_rets) > 20:
+                        common_idx = stock_rets.index.intersection(nifty_rets.index)
+                        if len(common_idx) > 20:
+                            sr = stock_rets.loc[common_idx]
+                            nr = nifty_rets.loc[common_idx]
+                            cov = np.cov(sr.dropna(), nr.dropna())
+                            beta_val = cov[0,1] / cov[1,1] if cov[1,1] > 0 else 1.0
+                            beta_threshold = risk_cfg.get('threshold', 0.8)
+                            if beta_val < beta_threshold:
+                                exclude = True
+                                reason = f"beta {beta_val:.2f} < {beta_threshold}"
+
+            # f) Price structure filters
+            ps_cfg = filter_config.get('price_above_sma50', {})
+            if ps_cfg.get('enabled') and not exclude:
+                sma_col = "SMA_50"
+                sma_val = float(row.get(sma_col, 0))
+                if sma_val > 0 and close < sma_val:
+                    exclude = True
+                    reason = f"close {close:.0f} < SMA50 {sma_val:.0f}"
+
+            ps_cfg = filter_config.get('price_above_sma200', {})
+            if ps_cfg.get('enabled') and not exclude:
+                sma_col = "SMA_200"
+                sma_val = float(row.get(sma_col, 0))
+                if sma_val > 0 and close < sma_val:
+                    exclude = True
+                    reason = f"close {close:.0f} < SMA200 {sma_val:.0f}"
+
+            ps_cfg = filter_config.get('stage2', {})
+            if ps_cfg.get('enabled') and not exclude:
+                sma50 = float(row.get("SMA_50", 0))
+                sma200 = float(row.get("SMA_200", 0))
+                if sma50 > 0 and sma200 > 0:
+                    if close < sma50 or sma50 < sma200:
+                        exclude = True
+                        reason = f"close {close:.0f} or SMA50 {sma50:.0f} < SMA200 {sma200:.0f}"
+
+            if exclude:
+                print(f"   [FILTER] Excluding {ticker}: {reason}")
+            else:
+                filtered.append((ticker, score))
+
+        if len(filtered) < len(top_stocks):
+            print(f"   [FILTERS] {len(top_stocks) - len(filtered)}/{len(top_stocks)} stocks filtered out, {len(filtered)} remaining")
+        return filtered
 
     def _check_risk_management(self, date, holdings, entry_prices, risk_config):
         """
@@ -1926,30 +2084,9 @@ class PortfolioEngine:
                         print(f"   [STOCK REGIME] {len(top_stocks) - len(filtered_top_stocks)} stocks filtered out, {len(filtered_top_stocks)} remaining")
                     top_stocks = filtered_top_stocks
                 
-                # Volume filter: exclude stocks with volume below SMA
-                if filter_config and filter_config.get('volume_filter', False) and top_stocks:
-                    volume_sma_period = filter_config.get('volume_sma_period', 20)
-                    vol_col = f'Volume_SMA_{volume_sma_period}'
-                    above_col = 'Volume_Above_SMA'
-                    filtered_volume_stocks = []
-                    for ticker, score in top_stocks:
-                        if ticker in self.data and date in self.data[ticker].index:
-                            try:
-                                row = self.data[ticker].loc[date]
-                                vol_above = row.get(above_col, row.get(vol_col, None))
-                                if vol_above is None:
-                                    filtered_volume_stocks.append((ticker, score))
-                                elif vol_above:
-                                    filtered_volume_stocks.append((ticker, score))
-                                else:
-                                    print(f"   [VOLUME FILTER] Excluding {ticker} - volume below SMA on {date.date()}")
-                            except Exception:
-                                filtered_volume_stocks.append((ticker, score))
-                        else:
-                            filtered_volume_stocks.append((ticker, score))
-                    if len(filtered_volume_stocks) < len(top_stocks):
-                        print(f"   [VOLUME FILTER] {len(top_stocks) - len(filtered_volume_stocks)} stocks filtered out, {len(filtered_volume_stocks)} remaining")
-                    top_stocks = filtered_volume_stocks
+                # ── OTHER FILTERS PIPELINE ─────────────────────────────────────
+                if filter_config is not None and top_stocks:
+                    top_stocks = self._apply_other_filters(top_stocks, filter_config, date)
                 
                 # Buy stocks with available_for_stocks amount
                 if not top_stocks and available_for_stocks > 0:

@@ -415,6 +415,19 @@ class IndicatorLibrary:
         return df
 
     @staticmethod
+    @staticmethod
+    def add_adx(df, period=14):
+        """Add Average Directional Index (ADX) for trend strength measurement."""
+        high = df['High'].squeeze() if isinstance(df['High'], pd.DataFrame) else df['High']
+        low = df['Low'].squeeze() if isinstance(df['Low'], pd.DataFrame) else df['Low']
+        close = df['Close'].squeeze() if isinstance(df['Close'], pd.DataFrame) else df['Close']
+        adx_indicator = ta.trend.ADXIndicator(high, low, close, window=period)
+        df[f'ADX_{period}'] = adx_indicator.adx()
+        df[f'ADX_PlusDI_{period}'] = adx_indicator.adx_pos()
+        df[f'ADX_MinusDI_{period}'] = adx_indicator.adx_neg()
+        return df
+
+    @staticmethod
     def add_volume_indicators(df, volume_sma_period=20):
         """Add volume-based indicators for stock filtering."""
         if 'Volume' not in df.columns:
