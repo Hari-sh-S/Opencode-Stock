@@ -1928,17 +1928,21 @@ class PortfolioEngine:
                 # Volume filter: exclude stocks with volume below SMA
                 if filter_config and filter_config.get('volume_filter', False) and top_stocks:
                     volume_sma_period = filter_config.get('volume_sma_period', 20)
+                    vol_col = f'Volume_SMA_{volume_sma_period}'
+                    above_col = 'Volume_Above_SMA'
                     filtered_volume_stocks = []
                     for ticker, score in top_stocks:
-                        if ticker in self.data and not self.data[ticker].empty:
-                            row = self._get_date_row(ticker, date)
-                            if row is not None:
-                                volume_above_sma = row.get('Volume_Above_SMA', row.get(f'Volume_Above_SMA_{volume_sma_period}', True))
-                                if volume_above_sma:
+                        if ticker in self.data and date in self.data[ticker].index:
+                            try:
+                                row = self.data[ticker].loc[date]
+                                vol_above = row.get(above_col, row.get(vol_col, None))
+                                if vol_above is None:
+                                    filtered_volume_stocks.append((ticker, score))
+                                elif vol_above:
                                     filtered_volume_stocks.append((ticker, score))
                                 else:
                                     print(f"   [VOLUME FILTER] Excluding {ticker} - volume below SMA on {date.date()}")
-                            else:
+                            except Exception:
                                 filtered_volume_stocks.append((ticker, score))
                         else:
                             filtered_volume_stocks.append((ticker, score))
