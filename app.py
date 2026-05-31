@@ -1807,7 +1807,17 @@ with main_tabs[0]:
                             
                             if not engine.portfolio_df.empty:
                                 pf = engine.portfolio_df['Portfolio Value']
-                                rolling_window = st.selectbox("Rolling Window", [3, 6, 12, 24, 36, 60], index=2, key="decay_window", format_func=lambda x: f"{x} Months")
+                                decay_window_opts = [3, 6, 12, 24, 36, 60]
+                                if 'decay_window' not in st.session_state:
+                                    st.session_state.decay_window = 12
+                                decay_win_cols = st.columns(len(decay_window_opts))
+                                for i, w in enumerate(decay_window_opts):
+                                    with decay_win_cols[i]:
+                                        btn_type = "primary" if st.session_state.decay_window == w else "secondary"
+                                        if st.button(f"{w}M", key=f"decay_btn_{w}", use_container_width=True, type=btn_type):
+                                            st.session_state.decay_window = w
+                                            st.rerun()
+                                rolling_window = st.session_state.decay_window
                                 
                                 # Resample to monthly
                                 monthly_val = pf.resample('ME').last()
@@ -1832,7 +1842,7 @@ with main_tabs[0]:
                                     
                                     decay_fig.add_trace(go.Scatter(x=rolling_sharpe.index, y=rolling_sharpe.values,
                                                                     name='Rolling Sharpe', line=dict(color='#ffc107')), row=3, col=1)
-                                    decay_fig.add_hline(y=0, line_dash='dash', line_color='gray', row=3, col=3)
+                                    decay_fig.add_hline(y=0, line_dash='dash', line_color='gray', row=3, col=1)
                                     
                                     decay_fig.update_layout(height=500, template='plotly_dark', showlegend=False)
                                     st.plotly_chart(decay_fig, use_container_width=True)
