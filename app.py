@@ -555,8 +555,9 @@ with main_tabs[0]:
                         
                     ph_col3, ph_col4 = st.columns(2)
                     with ph_col3:
-                        expiry_type_options = ["WEEKLY", "MONTHLY"]
-                        saved_expiry_type = saved_phc.get('expiry_type', 'WEEKLY')
+                        expiry_type_options = ["CURRENT WEEK", "NEXT WEEK", "CURRENT MONTH", "NEXT MONTH"]
+                        legacy_map = {"WEEKLY": "CURRENT WEEK", "MONTHLY": "CURRENT MONTH"}
+                        saved_expiry_type = legacy_map.get(saved_phc.get('expiry_type', 'WEEKLY'), saved_phc.get('expiry_type', 'CURRENT WEEK'))
                         expiry_type_idx = expiry_type_options.index(saved_expiry_type) if saved_expiry_type in expiry_type_options else 0
                         expiry_type = st.selectbox(
                             "Option Expiry",

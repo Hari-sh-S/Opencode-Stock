@@ -58,30 +58,55 @@ def get_atm_strike(nifty_spot: float) -> int:
 def get_next_expiry(from_dt, expiry_type="WEEKLY") -> date:
     """
     Get next Thursday (NIFTY weekly expiry) or last Thursday of month (MONTHLY expiry) after from_dt.
+
+    Supported expiry_type values:
+      "WEEKLY" / "CURRENT WEEK"   → next Thursday (or next week if today is Thursday)
+      "NEXT WEEK"                  → next Thursday + 7 days
+      "MONTHLY" / "CURRENT MONTH"  → last Thursday of current month (or next month if past)
+      "NEXT MONTH"                 → last Thursday of next month
     """
     if isinstance(from_dt, (datetime, pd.Timestamp)):
         from_dt = from_dt.date() if hasattr(from_dt, 'date') else date.fromisoformat(str(from_dt)[:10])
 
-    if expiry_type == "MONTHLY":
+    etype = expiry_type.upper().replace(" ", "_")
+
+    if etype in ("MONTHLY", "CURRENT_MONTH"):
         import calendar
         def get_last_thu(y, m):
             last_day = calendar.monthrange(y, m)[1]
             last_dt = date(y, m, last_day)
             offset = (last_dt.weekday() - 3) % 7
             return last_dt - timedelta(days=offset)
-        
+
         last_thu = get_last_thu(from_dt.year, from_dt.month)
         if last_thu <= from_dt:
             next_m = from_dt.month + 1 if from_dt.month < 12 else 1
             next_y = from_dt.year if from_dt.month < 12 else from_dt.year + 1
             last_thu = get_last_thu(next_y, next_m)
         return last_thu
-    else:
-        weekday = from_dt.weekday()      # Mon=0, Thu=3, Sun=6
-        days_until_thu = (3 - weekday) % 7
-        if days_until_thu == 0:
-            days_until_thu = 7           # Already Thursday – roll to next week
-        return from_dt + timedelta(days=days_until_thu)
+
+    if etype == "NEXT_MONTH":
+        import calendar
+        def get_last_thu(y, m):
+            last_day = calendar.monthrange(y, m)[1]
+            last_dt = date(y, m, last_day)
+            offset = (last_dt.weekday() - 3) % 7
+            return last_dt - timedelta(days=offset)
+
+        next_m = from_dt.month + 1 if from_dt.month < 12 else 1
+        next_y = from_dt.year if from_dt.month < 12 else from_dt.year + 1
+        return get_last_thu(next_y, next_m)
+
+    # WEEKLY / CURRENT WEEK / default
+    weekday = from_dt.weekday()
+    days_until_thu = (3 - weekday) % 7
+    if days_until_thu == 0:
+        days_until_thu = 7
+
+    if etype == "NEXT_WEEK":
+        return from_dt + timedelta(days=days_until_thu + 7)
+
+    return from_dt + timedelta(days=days_until_thu)
 
 
 

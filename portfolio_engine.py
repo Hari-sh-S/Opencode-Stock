@@ -588,6 +588,7 @@ class PortfolioEngine:
         
         
         print(f"Generated {len(rebalance_dates)} rebalance dates from {len(all_dates)} trading days ({freq})")
+        print(f"Rebalance dates: {[str(d.date()) for d in rebalance_dates]}")
         return sorted(rebalance_dates)
 
     def _check_stock_regime_filter(self, ticker, date, regime_config):
@@ -1902,7 +1903,7 @@ class PortfolioEngine:
                 # Rank stocks
                 ranked_stocks = sorted(scores.items(), key=lambda x: x[1], reverse=True)
                 
-                # Debug: Log scoring results
+                print(f"   [REBALANCE] {date.date()}: {len(date_rows)} stocks in universe, {len(scores)} scored, {len(ranked_stocks)} ranked, need {num_stocks}")
                 if len(scores) == 0:
                     print(f"   [WARN] No stocks scored on {date.date()} - check indicator columns")
                 elif len(ranked_stocks) < num_stocks:
@@ -1951,6 +1952,11 @@ class PortfolioEngine:
                     top_stocks = filtered_volume_stocks
                 
                 # Buy stocks with available_for_stocks amount
+                if not top_stocks and available_for_stocks > 0:
+                    print(f"   [REBALANCE] No stocks to buy on {date.date()} - all stocks filtered out by scoring/filters")
+                elif available_for_stocks <= 0:
+                    print(f"   [REBALANCE] No capital available for stocks on {date.date()} (regime may be active)")
+                
                 if top_stocks and available_for_stocks > 0:
                     # Get position sizing config (default to equal weight)
                     sizing_method = 'equal_weight'
