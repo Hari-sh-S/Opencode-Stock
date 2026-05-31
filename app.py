@@ -1382,6 +1382,7 @@ with main_tabs[0]:
                         with result_tabs[4]:
                             st.markdown("### Trade History")
                             if not engine.trades_df.empty:
+                                st.caption(f"Total trades: {len(engine.trades_df)} ({len(engine.trades_df[engine.trades_df['Action']=='BUY'])} buys, {len(engine.trades_df[engine.trades_df['Action']=='SELL'])} sells)")
                                 # Create consolidated trade view matching BUY with SELL
                                 trades_df = engine.trades_df.copy()
                                 buy_trades = trades_df[trades_df['Action'].isin(['BUY', 'BUY_HEDGE'])].copy()
@@ -1496,7 +1497,7 @@ with main_tabs[0]:
                                     
                                     st.markdown("---")
                                     st.markdown("### 📈 Open Positions (Current Holdings)")
-                                    st.caption("These are positions bought but not yet sold at the end of the backtest period. Go to **Execute Trades** tab to place orders.")
+                                    st.caption("These are positions bought but not yet sold at the end of the backtest period.")
                                     
                                     open_df = pd.DataFrame(open_positions)
                                     
@@ -1512,8 +1513,17 @@ with main_tabs[0]:
                                     )
                                     st.dataframe(styled_open, use_container_width=True)
                                     
-                                    # Prompt to use Execute Trades tab
-                                    st.info("👉 Go to the **Execute Trades** tab to place orders on Zerodha with these positions.")
+                                    st.info("👉 Go to **Execute Trades** tab to place orders on Zerodha with these positions.")
+                                else:
+                                    # Fallback: try engine.get_open_positions()
+                                    fallback_positions = engine.get_open_positions()
+                                    if fallback_positions:
+                                        st.session_state['open_positions'] = fallback_positions
+                                        st.markdown("---")
+                                        st.markdown("### 📈 Open Positions (from Engine)")
+                                        st.caption("Positions still held at backtest end.")
+                                        fb_df = pd.DataFrame(fallback_positions)
+                                        st.dataframe(fb_df, use_container_width=True)
                             else:
                                 st.info("No trades executed")
                         
