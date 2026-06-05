@@ -1508,12 +1508,16 @@ class PortfolioEngine:
         if is_put_hedge_regime:
             _from = self.start_date
             _to   = self.end_date
+            # Map user-facing expiry_type to Dhan API format (WEEKLY or MONTHLY)
+            ph_cfg = regime_config.get('put_hedge_config', {})
+            user_expiry = ph_cfg.get('expiry_type', 'CURRENT WEEK')
+            user_expiry_up = user_expiry.upper().replace(" ", "_")
+            dhan_expiry = "MONTHLY" if "MONTH" in user_expiry_up else "WEEKLY"
             try:
                 from nifty_put_hedge import load_or_build_hedge_data
-                # New signature: (from_date, to_date, use_fallback=True)
-                # No strike_offset or expiry_type — always ATM Weekly per design
                 put_hedge_df = load_or_build_hedge_data(
                     _from, _to,
+                    expiry_type=dhan_expiry,
                     use_fallback=True,
                 )
                 if put_hedge_df is not None and not put_hedge_df.empty:

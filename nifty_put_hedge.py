@@ -417,7 +417,7 @@ def _fetch_chunk(dhan_client, from_dt: date, to_dt: date, expiry_type="WEEKLY") 
             print(f"[PUT HEDGE] SDK call failed ({e}), trying direct REST...")
 
     # Direct REST fallback
-    return _fetch_chunk_rest(from_dt, to_dt)
+    return _fetch_chunk_rest(from_dt, to_dt, expiry_type=expiry_type)
 
 
 def _fetch_chunk_rest(from_dt: date, to_dt: date, expiry_type="WEEKLY") -> pd.DataFrame:
@@ -465,9 +465,10 @@ def fetch_rolling_options_data(
     to_date,
     delay_seconds: float = 0.6,
     progress_callback=None,
+    expiry_type="WEEKLY",
 ) -> pd.DataFrame:
     """
-    Fetch NIFTY ATM Weekly Put data from Dhan Rolling Options API.
+    Fetch NIFTY ATM Put data from Dhan Rolling Options API.
 
     - Chunks the date range into 30-day windows
     - Only fetches for dates >= DATA_AVAILABLE_FROM (Jan 2020)
@@ -478,6 +479,7 @@ def fetch_rolling_options_data(
         to_date:           End date
         delay_seconds:     Pause between API calls (rate limiting)
         progress_callback: Optional callable(current, total, label)
+        expiry_type:       Dhan API expiry type ("WEEKLY" or "MONTHLY")
 
     Returns:
         Daily DataFrame (DatetimeIndex) with Open/High/Low/Close/Volume/OI/IV/Spot/Strike
@@ -510,14 +512,14 @@ def fetch_rolling_options_data(
         chunks.append((cur, end))
         cur = end + timedelta(days=1)
 
-    print(f"[PUT HEDGE] Fetching {len(chunks)} chunks ({from_date} → {to_date})...")
+    print(f"[PUT HEDGE] Fetching {len(chunks)} chunks ({from_date} → {to_date}), expiryType={expiry_type}...")
 
     all_frames = []
     for i, (cf, ct) in enumerate(chunks):
         if progress_callback:
             progress_callback(i + 1, len(chunks), f"Chunk {i+1}/{len(chunks)}: {cf} → {ct}")
 
-        chunk_df = _fetch_chunk(dhan_client, cf, ct)
+        chunk_df = _fetch_chunk(dhan_client, cf, ct, expiry_type=expiry_type)
         if chunk_df is not None and not chunk_df.empty:
             all_frames.append(chunk_df)
         else:
